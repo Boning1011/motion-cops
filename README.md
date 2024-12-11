@@ -4,7 +4,7 @@ A collection of OpenCL-based image processing tools for Houdini's Copernicus. Fe
 ---
 
 ### Growth Propagation
-This tool is designed to streamline the creation of organic growth patterns while maintaining professional-grade performance and flexibility.
+This tool is designed to streamline the creation of organic growth patterns while maintaining professional-grade performance and flexibility. Originally based on Nick Tylor's Aelib tool, reimplemented and optimized for COPs.
 - OpenCL-powered implementation delivers real-time interactivity across thousands of iterations.
 - Intuitive interface for generating effects ranging from basic organic mask spreading to complex DLA-style vein structures.
 - Comprehensive control system for precise manipulation of growth direction, fade patterns, and blur effects.
