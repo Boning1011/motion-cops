@@ -1,0 +1,10 @@
+{
+    "env":[
+        {
+            "CopernicusToolkit": "path/to/houdini-copernicus-toolkit"
+        }
+    ],
+    "hpath":[
+        "$CopernicusToolkit"
+    ]
+}

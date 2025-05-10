@@ -7,6 +7,16 @@ All tools in this toolkit are built using Houdini 20.5's new OpenCL-based Copern
 - **Lightning-Fast 4K Performance**: 10-100x faster than VEX implementations with responsive real-time feedback even at 4K resolution
 
 - **Animated Shader Textures**: Create evolving procedural effects perfect for motion design with time-based parameters that produce organic animations
+
+# Installation (Houdini Package)
+
+- Download and extract the repository and move it to any location
+- Create a folder called `packages` in your Houdini home directory (e.g. `C:/Users/MY_USER/Documents/houdini20.5`) if it does not exist already
+- Copy the `CopernicusToolkit.json` file into the `packages` folder
+- Edit the json file to point to the Copernicus Toolkit parent directory (edit the "COPERNICUS_TOOLKIT" line)
+- This package is designed for Houdini 20.5 (current) or higher (future versions)
+- For more information on how package files work, see the [official Houdini documentation](https://www.sidefx.com/docs/houdini/ref/plugins.html)
+
 ## Tools Included
 
 - [Growth Propagation](#growth-propagation) - Create organic growth patterns and DLA-style structures
