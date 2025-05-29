@@ -1,0 +1,10 @@
+{
+    "env":[
+        {
+            "MotionCOPs": "path/to/motion-cops"
+        }
+    ],
+    "hpath":[
+        "$MotionCOPs"
+    ]
+}
