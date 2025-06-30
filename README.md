@@ -38,7 +38,7 @@ Generate organic spreading patterns from simple masks to complex vein structures
 - **Directional Control**: Shape growth patterns with directional fields and attractors
 - **Animation Ready**: Perfect for evolving textures in motion graphics projects
   
-<img src="https://github.com/Boning1011/motion-cops/blob/main/demo/growth_propagation/growth_02.gif" width="320" height="320"/><img src="https://github.com/Boning1011/motion-cops/blob/main/demo/growth_propagation/growth_03.gif" width="320" height="320"/><img src="https://github.com/Boning1011/motion-cops/blob/main/demo/growth_propagation/growth_dirControl_01.gif" width="320" height="320"/>
+<img src="https://github.com/Boning1011/motion-cops/blob/main/demo/growth_propagation/growth_02.gif" width="300" height="300"/><img src="https://github.com/Boning1011/motion-cops/blob/main/demo/growth_propagation/growth_03.gif" width="300" height="300"/><img src="https://github.com/Boning1011/motion-cops/blob/main/demo/growth_propagation/growth_dirControl_01.gif" width="300" height="300"/>
 
 ### Pixel Sorting
 
