@@ -13,12 +13,11 @@ All tools are built using Houdini 20.5's new OpenCL-based Copernicus framework, 
 - [Growth Propagation](#growth-propagation) - Create organic growth patterns and DLA-style structures
 - [Pixel Sorting](#pixel-sorting) - Classic pixel sorting effect for image
 - COPs Solver - Simulation in Copernicus
+- Risograph
 - Frame Blend
-- Timeshift
 - Directional Occlusion
 - Angle Quantize
 - add MORE...
-
 
 ## Installation (Houdini Package)
 
@@ -29,7 +28,7 @@ All tools are built using Houdini 20.5's new OpenCL-based Copernicus framework, 
 - This package is designed for Houdini 20.5 (current) or higher (future versions)
 - For more information on how package files work, see the [official Houdini documentation](https://www.sidefx.com/docs/houdini/ref/plugins.html)
 
-
+## Demos
 
 
 ### Growth Propagation
@@ -49,17 +48,20 @@ A fast OpenCL implementation of the classic pixel sorting effect - widely used f
 - **Simple Masking System**: Easily control where sorting occurs using luminance values or custom masks  
 - **Animation Ready**: Create evolving effects with built-in growth animation parameters
 
-<img src="https://github.com/Boning1011/motion-cops/blob/main/demo/pixelsorting/pixelsort_01.gif" width="320" height="320"/>
+<img src="https://github.com/Boning1011/motion-cops/blob/main/demo/pixelsorting/pixelsorting_mandril_v1.gif" width="320" height="320"/>
 
 ### Risograph
 
-The node that makes EVERYTHING look good
-Instant risograph print look (that trendy aesthetic everyone wants). Built on actual print physics (how real ink behaves on paper).
-✓ Real ink colors that mix naturally - not those fake RGB filters
-✓ Gorgeous texture and grain that adds $$$ production value
-✓ Three styles: organic, halftone, or digital
+The node that makes EVERYTHING look good. Instant risograph print look (that trendy aesthetic everyone wants). Built on actual print physics (how real ink behaves on paper).
 
-<img src="https://github.com/Boning1011/motion-cops/blob/main/demo/risograph/risograph_01.gif" width="320" height="320"/><img src="https://github.com/Boning1011/motion-cops/blob/main/demo/risograph/risograph_02.gif" width="320" height="320"/><img src="https://github.com/Boning1011/motion-cops/blob/main/demo/risograph/risograph_03.gif" width="320" height="320"/>
+- Real ink colors that mix naturally - not those fake RGB filters
+
+- Gorgeous texture and grain that adds $$$ production value
+
+- Three styles: organic, halftone, or digital
+
+
+<img src="https://github.com/Boning1011/motion-cops/blob/main/demo/risograph/mandril_v1_1k.png" width="320" height="320"/><img src="https://github.com/Boning1011/motion-cops/blob/main/demo/risograph/pig_all_1080.png" width="320" height="320"/><img src="https://github.com/Boning1011/motion-cops/blob/main/demo/risograph/ditherMode_v2_2k.png" width="410" height="614"/>
 
 
 
