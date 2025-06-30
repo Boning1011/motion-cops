@@ -39,7 +39,7 @@ Generate organic spreading patterns from simple masks to complex vein structures
 - **Directional Control**: Shape growth patterns with directional fields and attractors
 - **Animation Ready**: Perfect for evolving textures in motion graphics projects
   
-<img src="https://github.com/Boning1011/copernicus-toolkit/blob/main/demo/growth_propagation/growth_02.gif" width="320" height="320"/><img src="https://github.com/Boning1011/copernicus-toolkit/blob/main/demo/growth_propagation/growth_03.gif" width="320" height="320"/><img src="https://github.com/Boning1011/copernicus-toolkit/blob/main/demo/growth_propagation/growth_dirControl_01.gif" width="320" height="320"/>
+<img src="https://github.com/Boning1011/motion-cops/blob/main/demo/growth_propagation/growth_02.gif" width="320" height="320"/><img src="https://github.com/Boning1011/motion-cops/blob/main/demo/growth_propagation/growth_03.gif" width="320" height="320"/><img src="https://github.com/Boning1011/motion-cops/blob/main/demo/growth_propagation/growth_dirControl_01.gif" width="320" height="320"/>
 
 ### Pixel Sorting
 
@@ -49,7 +49,7 @@ A fast OpenCL implementation of the classic pixel sorting effect - widely used f
 - **Simple Masking System**: Easily control where sorting occurs using luminance values or custom masks  
 - **Animation Ready**: Create evolving effects with built-in growth animation parameters
 
-<img src="https://github.com/Boning1011/copernicus-toolkit/blob/main/demo/pixelsorting/pixelsort_01.gif" width="320" height="320"/>
+<img src="https://github.com/Boning1011/motion-cops/blob/main/demo/pixelsorting/pixelsort_01.gif" width="320" height="320"/>
 
 ### Risograph
 
@@ -59,7 +59,7 @@ Instant risograph print look (that trendy aesthetic everyone wants). Built on ac
 ✓ Gorgeous texture and grain that adds $$$ production value
 ✓ Three styles: organic, halftone, or digital
 
-<img src="https://github.com/Boning1011/copernicus-toolkit/blob/main/demo/risograph/risograph_01.gif" width="320" height="320"/><img src="https://github.com/Boning1011/copernicus-toolkit/blob/main/demo/risograph/risograph_02.gif" width="320" height="320"/><img src="https://github.com/Boning1011/copernicus-toolkit/blob/main/demo/risograph/risograph_03.gif" width="320" height="320"/>
+<img src="https://github.com/Boning1011/motion-cops/blob/main/demo/risograph/risograph_01.gif" width="320" height="320"/><img src="https://github.com/Boning1011/motion-cops/blob/main/demo/risograph/risograph_02.gif" width="320" height="320"/><img src="https://github.com/Boning1011/motion-cops/blob/main/demo/risograph/risograph_03.gif" width="320" height="320"/>
 
 
 
