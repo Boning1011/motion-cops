@@ -1,6 +1,6 @@
 # Houdini MotionCOPs Toolkit
 
-All tools are built using Houdini 20.5's new OpenCL-based Copernicus framework, providing:
+Supports **Houdini 21.0** and above. All tools are built on Houdini's OpenCL-based Copernicus framework, providing:
 
 - **Quick Results**: Create professional-quality effects in minutes with simple, intuitive controls that require minimal setup time
   
@@ -8,24 +8,89 @@ All tools are built using Houdini 20.5's new OpenCL-based Copernicus framework, 
 
 - **Animated Shader Textures**: Create evolving procedural effects perfect for motion design with time-based parameters that produce organic animations
 
-## Featured Tools Included
+## Tool Catalog (32 Tools)
 
-- [Growth Propagation](#growth-propagation) - Create organic growth patterns and DLA-style structures
-- [Pixel Sorting](#pixel-sorting) - Classic pixel sorting effect for image
-- COPs Solver - Simulation in Copernicus
-- Risograph
-- Frame Blend
-- Directional Occlusion
-- Angle Quantize
-- add MORE...
+### Dithering & Stylization (6)
+
+| Tool | Description | Inputs |
+|------|-------------|--------|
+| **Risograph** | Full risograph print pipeline — ink palette, layer separation, dithering, offset | 1 |
+| **Halftone Dither** | Halftone dot patterns with size, noise, rotation, and blur controls | 1 |
+| **Ordered Dither** | Bayer-matrix ordered dithering with configurable block scale and quant levels | 1 |
+| **Noise Dither** | Noise-based stochastic dithering | 1 |
+| **Dither Mono** | Simple monochrome threshold dithering with pre-processing | 1 |
+| **Pixel Sorting** | GPU pixel sorting for glitch art — directional, masked, with growth animation | 2 |
+
+### Kubelka-Munk Color Science (4)
+
+| Tool | Description | Inputs |
+|------|-------------|--------|
+| **RGB to KM** | Convert RGB to Kubelka-Munk scattering/absorption color space | 1 |
+| **KM to RGB** | Convert Kubelka-Munk back to RGB | 1 |
+| **KM Converter** | Bidirectional RGB ↔ KM conversion | 1 |
+| **KM Blend** | Physically-based color blending in KM space (with mask) | 3 |
+
+### Point ↔ Layer Bridge (5)
+
+| Tool | Description | Inputs |
+|------|-------------|--------|
+| **mc Mono to Points** | Convert monochrome image to point cloud with relaxation | 1 |
+| **mc Point to Density** | Rasterize points into a density field layer | 2 |
+| **mc Point to Shape** | Rasterize points as shapes with velocity | 1 |
+| **mc Point Velocity to Layer** | Write point velocity data into a COP layer | 2 |
+| **mc Point Advect by Layer** | Advect points using a velocity layer (wind, drag, max speed) | 2 |
+
+### Image Distortion & FX (4)
+
+| Tool | Description | Inputs |
+|------|-------------|--------|
+| **mc Blackhole Distort** | Gravitational lens-style distortion with strength, radius, falloff | 2 |
+| **mc Ripple** | Procedural ripple wave effect (speed, damping, iterations) | 3 |
+| **mc Ripple Solver** | Time-stepping ripple simulation with reset and time scale | 2 |
+| **mc Velocity Anti-Grid** | Remove grid artifacts from velocity fields | 1 |
+
+### Simulation & Growth (3)
+
+| Tool | Description | Inputs |
+|------|-------------|--------|
+| **Growth Propagation** | Organic growth patterns — DLA, veins, cracks, lightning | 5 |
+| **Reactiondiffusion Presets** | Preset library for reaction-diffusion patterns | 0 |
+| **Copernicus Solver** *(SOP)* | SOP-level simulation framework for Copernicus networks | 4 |
+
+### Analysis & SDF (5)
+
+| Tool | Description | Inputs |
+|------|-------------|--------|
+| **Gaussian Slope** | Slope detection via Gaussian kernel (detail, scale, rotation) | 1 |
+| **Slope Visualize** | Quick slope direction visualization | 1 |
+| **Angle Quantize** | Quantize gradient angles to fixed increments with magnitude mixing | 1 |
+| **Directional Occlusion** | Directional ambient occlusion from heightfield | 2 |
+| **mc SDF Smooth Union** | Smooth boolean union for SDF layers with anti-aliasing | 2 |
+
+### Time & Caching (4)
+
+| Tool | Description | Inputs |
+|------|-------------|--------|
+| **Time Shift** | Frame offset / retime with clamping options | 1 |
+| **Frame Blend** | Temporal blending across frames | 1 |
+| **Cache** | In-memory COP frame caching with auto-clear | 1 |
+| **mc TOP Image Cache** | TOP-driven disk cache for COP sequences | 1 |
+
+### Utility (3)
+
+| Tool | Description | Inputs |
+|------|-------------|--------|
+| **mc UV Adjust** | Masked UV rotation and length remapping | 2 |
+| **mc Range Visualize** | False-color visualization of value ranges via ramp | 1 |
+| **mc Flow Block Begin / End** | Loop control blocks for iterative COP processing | — |
 
 ## Installation (Houdini Package)
 
 - Download and extract the repository and move it to any location
-- Create a folder called `packages` in your Houdini home directory (e.g. `C:/Users/MY_USER/Documents/houdini20.5`) if it does not exist already
+- Create a folder called `packages` in your Houdini home directory (e.g. `C:/Users/MY_USER/Documents/houdini21.0`) if it does not exist already
 - Copy the `MotionCOPs.json` file into the `packages` folder
 - Edit the json file to point to the MotionCOPs parent directory (edit the "MotionCOPs" line)
-- This package is designed for Houdini 20.5 (current) or higher (future versions)
+- This package is designed for Houdini 21.0 or higher
 - For more information on how package files work, see the [official Houdini documentation](https://www.sidefx.com/docs/houdini/ref/plugins.html)
 
 ## Demos
