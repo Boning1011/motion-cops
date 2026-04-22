@@ -6,9 +6,15 @@ Supports:
     * Combined shaper + 3D LUTs (1D applied first, then 3D).
     * DOMAIN_MIN / DOMAIN_MAX and LUT_{1D,3D}_INPUT_RANGE.
 
+Outputs:
+    graded         (RGBA) — LUT-applied result.
+    original_rgba  (RGBA) — input promoted to RGBA, no LUT applied.
+                            Used by a downstream blend node so the user-facing
+                            intensity slider doesn't re-trigger the (expensive)
+                            LUT lookup on every drag.
+
 Bindings:
-    lut_path  (String) — path to .cube file
-    intensity (Float)  — 0..1 blend between original and LUT-graded
+    lut_path  (String)  — path to .cube file
     input_log (Integer) — 0=feed data straight to LUT (input is already in LUT's
                           expected encoding); 1=encode linear input as Cineon log
                           before lookup (use this when the LUT was authored for
@@ -169,7 +175,6 @@ def _linear_to_cineon(x):
 # -- entry --
 src = kwargs["src"]
 lut_path = kwargs.get("lut_path", "")
-intensity = float(kwargs.get("intensity", 1.0))
 input_log = int(kwargs.get("input_log", 0))
 
 w, h = src.bufferResolution()
@@ -216,34 +221,39 @@ if lut["one_d"] is not None:
 if lut["three_d"] is not None:
     graded = _apply_3d(graded, lut["three_d"], lut["dmin_3d"], lut["dmax_3d"])
 
-if intensity < 1.0:
-    graded = rgb * (1.0 - intensity) + graded * intensity
+# Always produce RGBA on both outputs so a downstream blend can mix them
+# cleanly regardless of input layer type.
+graded_rgba = np.empty((h, w, 4), dtype=np.float32)
+graded_rgba[..., :3] = graded
+graded_rgba[..., 3] = img[..., 3] if in_ch >= 4 else 1.0
 
-# Always produce RGBA on the output side so the LUT's colour tint is visible
-# even when the input is a mono / B&W layer (the Instagram-filter use case).
-out = np.empty((h, w, 4), dtype=np.float32)
-out[..., :3] = graded
-if in_ch >= 4:
-    out[..., 3] = img[..., 3]
-else:
-    out[..., 3] = 1.0
+original_rgba = np.empty((h, w, 4), dtype=np.float32)
+original_rgba[..., :3] = rgb
+original_rgba[..., 3] = img[..., 3] if in_ch >= 4 else 1.0
 
-# Re-encode back to the input's storage type so we don't silently change
-# precision on the downstream layer.
-if in_dtype == np.uint8:
-    out_bytes = np.clip(out * 255.0 + 0.5, 0, 255).astype(np.uint8).tobytes()
-elif in_dtype == np.uint16:
-    out_bytes = np.clip(out * 65535.0 + 0.5, 0, 65535).astype(np.uint16).tobytes()
-elif in_dtype == np.float16:
-    out_bytes = out.astype(np.float16).tobytes()
-else:
-    out_bytes = out.astype(np.float32).tobytes()
 
-dst = hou.ImageLayer()
-dst.setDataWindow(0, 0, w, h)
-dst.setDisplayWindow(0, 0, w, h)
-dst.setChannelCount(4)
-dst.setStorageType(storage)
-dst.setTypeInfo(src.typeInfo())
-dst.setAllBufferElements(out_bytes)
-return {"dst": dst}
+def _encode(arr):
+    if in_dtype == np.uint8:
+        return np.clip(arr * 255.0 + 0.5, 0, 255).astype(np.uint8).tobytes()
+    if in_dtype == np.uint16:
+        return np.clip(arr * 65535.0 + 0.5, 0, 65535).astype(np.uint16).tobytes()
+    if in_dtype == np.float16:
+        return arr.astype(np.float16).tobytes()
+    return arr.astype(np.float32).tobytes()
+
+
+def _make_layer(arr):
+    layer = hou.ImageLayer()
+    layer.setDataWindow(0, 0, w, h)
+    layer.setDisplayWindow(0, 0, w, h)
+    layer.setChannelCount(4)
+    layer.setStorageType(storage)
+    layer.setTypeInfo(src.typeInfo())
+    layer.setAllBufferElements(_encode(arr))
+    return layer
+
+
+return {
+    "graded": _make_layer(graded_rgba),
+    "original_rgba": _make_layer(original_rgba),
+}
