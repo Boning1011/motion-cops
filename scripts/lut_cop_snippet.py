@@ -173,31 +173,77 @@ intensity = float(kwargs.get("intensity", 1.0))
 input_log = int(kwargs.get("input_log", 0))
 
 w, h = src.bufferResolution()
-ch = src.channelCount()
+in_ch = src.channelCount()
 buf = src.allBufferElements()
-img = np.frombuffer(buf, dtype=np.float32).reshape(h, w, ch).copy()
+storage = src.storageType()
 
-rgb = img[..., :3]
+# Decode storage type to a numpy dtype + a normalisation factor.
+storage_name = str(storage)
+if "Float16" in storage_name:
+    in_dtype = np.float16
+    norm_in = 1.0
+elif "UNorm16" in storage_name:
+    in_dtype = np.uint16
+    norm_in = 1.0 / 65535.0
+elif "UNorm8" in storage_name:
+    in_dtype = np.uint8
+    norm_in = 1.0 / 255.0
+else:  # Float32 / anything unrecognised
+    in_dtype = np.float32
+    norm_in = 1.0
+
+img = np.frombuffer(buf, dtype=in_dtype).reshape(h, w, in_ch).astype(np.float32)
+if norm_in != 1.0:
+    img = img * norm_in
+
+# Promote whatever we got to a 3-channel RGB working buffer so the LUT can
+# always be applied. Mono is replicated, UV is padded with zero blue,
+# everything else takes the first three channels.
+if in_ch == 1:
+    rgb = np.repeat(img, 3, axis=2)
+elif in_ch == 2:
+    rgb = np.zeros((h, w, 3), dtype=np.float32)
+    rgb[..., 0:2] = img
+else:
+    rgb = img[..., :3].copy()
+
 rgb_in = _linear_to_cineon(rgb) if input_log else rgb
 
 lut = _get_lut(lut_path)
 graded = rgb_in
 if lut["one_d"] is not None:
-    graded = _apply_1d(graded, lut["one_d"], lut["dmin_1d"], lut["dmin_1d"] * 0 + lut["dmax_1d"])
+    graded = _apply_1d(graded, lut["one_d"], lut["dmin_1d"], lut["dmax_1d"])
 if lut["three_d"] is not None:
     graded = _apply_3d(graded, lut["three_d"], lut["dmin_3d"], lut["dmax_3d"])
 
 if intensity < 1.0:
     graded = rgb * (1.0 - intensity) + graded * intensity
 
-out = img.copy()
-out[..., :3] = graded.astype(np.float32)
+# Always produce RGBA on the output side so the LUT's colour tint is visible
+# even when the input is a mono / B&W layer (the Instagram-filter use case).
+out = np.empty((h, w, 4), dtype=np.float32)
+out[..., :3] = graded
+if in_ch >= 4:
+    out[..., 3] = img[..., 3]
+else:
+    out[..., 3] = 1.0
+
+# Re-encode back to the input's storage type so we don't silently change
+# precision on the downstream layer.
+if in_dtype == np.uint8:
+    out_bytes = np.clip(out * 255.0 + 0.5, 0, 255).astype(np.uint8).tobytes()
+elif in_dtype == np.uint16:
+    out_bytes = np.clip(out * 65535.0 + 0.5, 0, 65535).astype(np.uint16).tobytes()
+elif in_dtype == np.float16:
+    out_bytes = out.astype(np.float16).tobytes()
+else:
+    out_bytes = out.astype(np.float32).tobytes()
 
 dst = hou.ImageLayer()
 dst.setDataWindow(0, 0, w, h)
 dst.setDisplayWindow(0, 0, w, h)
-dst.setChannelCount(ch)
-dst.setStorageType(src.storageType())
+dst.setChannelCount(4)
+dst.setStorageType(storage)
 dst.setTypeInfo(src.typeInfo())
-dst.setAllBufferElements(out.tobytes())
+dst.setAllBufferElements(out_bytes)
 return {"dst": dst}
