@@ -1,0 +1,48 @@
+name: Archive Traffic Data
+
+on:
+  schedule:
+    # Run daily at 03:00 UTC. Traffic API returns last 14 days,
+    # so daily snapshots give full overlap and zero data loss.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch traffic data
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p out
+          DATE=$(date -u +%Y-%m-%d)
+          gh api "repos/$REPO/traffic/views"           > "out/views-$DATE.json"
+          gh api "repos/$REPO/traffic/clones"          > "out/clones-$DATE.json"
+          gh api "repos/$REPO/traffic/popular/paths"   > "out/paths-$DATE.json"
+          gh api "repos/$REPO/traffic/popular/referrers" > "out/referrers-$DATE.json"
+
+      - name: Checkout traffic-logs
+        uses: actions/checkout@v4
+        with:
+          repository: Boning1011/traffic-logs
+          token: ${{ secrets.TRAFFIC_LOGS_TOKEN }}
+          path: traffic-logs
+
+      - name: Commit snapshots
+        run: |
+          REPO_NAME="${GITHUB_REPOSITORY##*/}"
+          DATE=$(date -u +%Y-%m-%d)
+          DEST="traffic-logs/$REPO_NAME"
+          mkdir -p "$DEST"
+          cp out/*.json "$DEST/"
+          cd traffic-logs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git diff --staged --quiet || git commit -m "Snapshot $REPO_NAME $DATE"
+          git push
