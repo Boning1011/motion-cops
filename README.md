@@ -2,7 +2,9 @@
 
 # MotionCOPs
 
-A growing toolkit of Copernicus nodes for Houdini 21, built from my daily work.
+> **Now compatible with Houdini 22** (Python 3.13) — Houdini 21 remains fully supported.
+
+A growing toolkit of Copernicus nodes for Houdini 21 & 22, built from my daily work.
 
 Every tool here is one I actually use — tested on real projects at 10K+ resolution and refined through day-to-day use. Not a tech demo: it's the kit I reach for every day.
 
@@ -10,7 +12,7 @@ Every tool here is one I actually use — tested on real projects at 10K+ resolu
 
 <img src="demo/all_nodes.png" width="500" alt="All MotionCOPs nodes"/>
 
-> Supports Houdini 21. Jump to [Installation](#installation).
+> Supports Houdini 21 & 22. Jump to [Installation](#installation).
 
 ---
 
