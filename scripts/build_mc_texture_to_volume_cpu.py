@@ -23,6 +23,14 @@ def callback_button(name, label, function_name):
     return parm
 
 
+def settings_callback(parm):
+    parm.setScriptCallback(
+        'exec(kwargs["node"].type().definition().sections()["PythonModule"].contents());settings_changed(kwargs)'
+    )
+    parm.setScriptCallbackLanguage(hou.scriptLanguage.Python)
+    return parm
+
+
 def heading(name, text):
     parm = hou.LabelParmTemplate(name, name, column_labels=(text,))
     parm.setTags({"sidefx::look": "block"})
@@ -34,10 +42,17 @@ def build_parameter_interface():
         "main", "Texture to Volume", folder_type=hou.folderType.Simple
     )
     main.addParmTemplate(heading("source_heading", "SOURCE"))
+    record_timeline = hou.ToggleParmTemplate(
+        "record_timeline", "Record While Playing", default_value=True
+    )
+    record_timeline.setHelp(
+        "When enabled, pressing Play records each timeline sample into CPU memory."
+    )
+    main.addParmTemplate(settings_callback(record_timeline))
     use_external = hou.ToggleParmTemplate(
         "use_external_cop", "Use External COP", default_value=False
     )
-    main.addParmTemplate(use_external)
+    main.addParmTemplate(settings_callback(use_external))
     external = hou.StringParmTemplate(
         "external_cop",
         "External COP / SOP",
@@ -46,34 +61,28 @@ def build_parameter_interface():
         string_type=hou.stringParmType.NodeReference,
     )
     external.setConditional(hou.parmCondType.HideWhen, "{ use_external_cop == 0 }")
-    main.addParmTemplate(external)
+    main.addParmTemplate(settings_callback(external))
     output_index = hou.IntParmTemplate(
         "output_index", "Output Index", 1, default_value=(0,), min=0, max=16
     )
     output_index.setConditional(
         hou.parmCondType.HideWhen, "{ use_external_cop == 0 }"
     )
-    main.addParmTemplate(output_index)
+    main.addParmTemplate(settings_callback(output_index))
 
     main.addParmTemplate(hou.SeparatorParmTemplate("source_sep"))
-    build_button = callback_button("build", "Build Volume", "build")
-    build_button.setJoinWithNext(True)
-    cancel_button = callback_button("cancel", "Cancel Build", "cancel")
-    cancel_button.setJoinWithNext(True)
-    main.addParmTemplate(build_button)
-    main.addParmTemplate(cancel_button)
     main.addParmTemplate(callback_button("clear", "Clear Memory", "clear"))
 
     main.addParmTemplate(hou.SeparatorParmTemplate("frame_sep"))
     main.addParmTemplate(heading("frame_heading", "FRAME RANGE"))
     main.addParmTemplate(
-        hou.MenuParmTemplate(
+        settings_callback(hou.MenuParmTemplate(
             "trange",
             "Valid Frame Range",
             ("off", "normal"),
-            ("Build Current Frame", "Build Frame Range"),
+            ("Current Frame Only", "Frame Range"),
             default_value=1,
-        )
+        ))
     )
     frame_range = hou.FloatParmTemplate(
         "f",
@@ -89,69 +98,82 @@ def build_parameter_interface():
         naming_scheme=hou.parmNamingScheme.Base1,
     )
     frame_range.setConditional(hou.parmCondType.DisableWhen, "{ trange == off }")
-    main.addParmTemplate(frame_range)
+    main.addParmTemplate(settings_callback(frame_range))
     main.addParmTemplate(
-        hou.IntParmTemplate(
+        settings_callback(hou.IntParmTemplate(
             "substeps", "Substeps", 1, default_value=(1,), min=1, max=64
-        )
+        ))
     )
     main.addParmTemplate(
-        hou.ToggleParmTemplate(
+        settings_callback(hou.ToggleParmTemplate(
             "initialize_sim", "Initialize Simulation OPs", default_value=True
-        )
+        ))
     )
 
     main.addParmTemplate(hou.SeparatorParmTemplate("volume_sep"))
     main.addParmTemplate(heading("volume_heading", "VOLUME"))
     main.addParmTemplate(
-        hou.MenuParmTemplate(
+        settings_callback(hou.MenuParmTemplate(
             "stack_axis",
             "Stack Direction",
             ("y", "z"),
             ("Y Up", "Z Forward"),
             default_value=0,
+        ))
+    )
+    for parm_name, label, default in (
+        ("voxel_resolution", "Voxel Resolution", "Unavailable"),
+        ("world_size", "World Size", "Unavailable"),
+        ("raw_memory", "Raw CPU Memory", "Unavailable"),
+        ("peak_memory", "Temporary Peak", "Unavailable"),
+    ):
+        result_info = hou.StringParmTemplate(
+            parm_name, label, 1, default_value=(default,)
         )
-    )
-    main.addParmTemplate(
-        hou.FloatParmTemplate(
-            "image_size", "Image Size", 1, default_value=(2.0,), min=0.0001, max=100.0
+        result_info.setConditional(
+            hou.parmCondType.DisableWhen,
+            "{ use_external_cop == 0 } { use_external_cop == 1 }",
         )
+        main.addParmTemplate(result_info)
+    main.addParmTemplate(
+        settings_callback(hou.StringParmTemplate(
+            "volume_name", "Volume Name", 1, default_value=("density",)
+        ))
     )
     main.addParmTemplate(
-        hou.StringParmTemplate("volume_name", "Volume Name", 1, default_value=("density",))
-    )
-    main.addParmTemplate(
-        hou.MenuParmTemplate(
+        settings_callback(hou.MenuParmTemplate(
             "channel",
             "Source Channel",
             ("first", "r", "g", "b", "a", "luma"),
             ("First", "Red", "Green", "Blue", "Alpha", "Luminance"),
             default_value=0,
-        )
+        ))
     )
-    main.addParmTemplate(hou.ToggleParmTemplate("flip_y", "Flip Source Y", default_value=False))
+    main.addParmTemplate(settings_callback(hou.ToggleParmTemplate(
+        "flip_y", "Flip Source Y", default_value=False
+    )))
 
     main.addParmTemplate(hou.SeparatorParmTemplate("viewport_sep"))
     main.addParmTemplate(heading("viewport_heading", "VIEWPORT"))
     main.addParmTemplate(
-        hou.IntParmTemplate(
+        settings_callback(hou.IntParmTemplate(
             "preview_resolution",
             "Preview Max Resolution",
             1,
             default_value=(256,),
             min=16,
             max=1024,
-        )
+        ))
     )
     main.addParmTemplate(
-        hou.IntParmTemplate(
+        settings_callback(hou.IntParmTemplate(
             "preview_update_interval",
             "Update Every N Slices",
             1,
-            default_value=(4,),
+            default_value=(1,),
             min=1,
             max=128,
-        )
+        ))
     )
     main.addParmTemplate(
         hou.FloatParmTemplate(
@@ -164,20 +186,20 @@ def build_parameter_interface():
         )
     )
     main.addParmTemplate(
-        hou.FloatParmTemplate(
+        settings_callback(hou.FloatParmTemplate(
             "memory_limit_gib",
             "Memory Limit (GiB)",
             1,
             default_value=(32.0,),
             min=0.1,
             max=128.0,
-        )
+        ))
     )
     status = hou.StringParmTemplate(
         "status",
         "Status",
         1,
-        default_value=("Connect a source and click Build Volume.",),
+        default_value=("Connect a source, then press Play to record.",),
     )
     status.setConditional(
         hou.parmCondType.DisableWhen,
@@ -268,17 +290,24 @@ definition.addSection(
     "Help",
     """= MC Texture to Volume CPU =
 
-An in-memory, File Cache-style builder that stacks animated 2D COP/SOP slices
-into one dense Float32 volume in CPU RAM.
+An in-memory timeline recorder that stacks animated 2D COP/SOP slices into one
+dense Float32 volume in CPU RAM.
 
 Connect a COP Network directly to input 1. Its displayed COP node is used as
 the source. Enable Use External COP only when an explicit node path is needed.
 A File Cache or another SOP that outputs a dense 2D Volume can also be wired to
 input 1.
 
-Build Volume advances the timeline and updates a low-resolution viewport
-volume while the full-resolution result grows in memory. Cancel preserves the
-previous full cache and leaves the partial preview visible.
+Enable Record While Playing and press Play. The asset allocates the complete
+dense volume from the source resolution and frame range, then writes each
+timeline sample into its corresponding slice. Playback is temporarily switched
+to play-every-frame mode so no samples are skipped. Pausing preserves progress;
+press Play again to continue.
+
+The source width is normalized to one world unit. Source aspect ratio controls
+the other image dimension, and frame count controls the stack dimension. The
+Resulting Volume field reports exact voxel resolution, world size, and raw RAM
+before recording starts.
 
 @outputs
 
@@ -299,12 +328,30 @@ definition.setMaxNumOutputs(2)
 definition.setParmTemplateGroup(build_parameter_interface())
 definition.addSection("PythonModule", hou.readFile(MODULE_SOURCE))
 definition.addSection("EditableNodes", "cpu_volume_cache viewport_preview_cache")
+definition.addSection(
+    "OnCreated",
+    'exec(kwargs["type"].definition().sections()["PythonModule"].contents());install_live(kwargs)',
+)
+definition.addSection(
+    "OnLoaded",
+    'exec(kwargs["type"].definition().sections()["PythonModule"].contents());install_live(kwargs)',
+)
 patch_connector_labels(definition)
 definition.save(LIBRARY)
 asset.matchCurrentDefinition()
 asset.setColor(hou.Color(0.22, 0.48, 0.72))
 asset.setUserData("nodeshape", "tabbed_left")
 asset.setSelected(True, clear_all_selected=True)
+module_scope = {}
+exec(
+    compile(
+        definition.sections()["PythonModule"].contents(),
+        "MCTextureToVolumePythonModule",
+        "exec",
+    ),
+    module_scope,
+)
+module_scope["install_live"]({"node": asset})
 
 print(
     {
