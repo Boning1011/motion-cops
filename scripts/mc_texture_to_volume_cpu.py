@@ -551,6 +551,7 @@ def _prepare_live_recording(node, config):
         raise hou.NodeError("Internal Viewport Preview Cache node is missing.")
     preview_cache.parm("stash").set(preview_geo)
     preview_cache.cook(force=True)
+    node.setOutputForViewFlag(1)
     node.setDisplayFlag(True)
     return state
 
@@ -597,6 +598,7 @@ def _commit_live_recording(node, state):
     full_cache.parm("stash").set(state["full_geo"])
     full_cache.cook(force=True)
     _refresh_live_preview(node, state)
+    node.setOutputForViewFlag(0)
     listener = _live_listeners().get(state["key"])
     if listener is not None:
         listener["completed_config_id"] = state["config_id"]
@@ -874,6 +876,7 @@ def install_live(kwargs):
                 pass
 
     node_path = node.path()
+    node.setOutputForViewFlag(0)
     node_events = (
         hou.nodeEventType.InputRewired,
         hou.nodeEventType.BeingDeleted,
@@ -1082,6 +1085,7 @@ def build(kwargs):
             ]
             source["node"].setDisplayFlag(True)
 
+        node.setOutputForViewFlag(1)
         node.setDisplayFlag(True)
         preview_cache = node.node("viewport_preview_cache")
         if preview_cache is None:
@@ -1198,6 +1202,7 @@ def build(kwargs):
                 full_cache = active_node.node("cpu_volume_cache")
                 full_cache.parm("stash").set(state["full_geo"])
                 full_cache.cook(force=True)
+                active_node.setOutputForViewFlag(0)
 
                 _remove_callback(state)
                 _restore_state(state, restore_sop_display=False)
@@ -1269,4 +1274,5 @@ def clear(kwargs):
         if cache is not None:
             cache.parm("stash").set(hou.Geometry())
             cache.cook(force=True)
+    node.setOutputForViewFlag(0)
     _set_status(node, "Memory cleared. Press Play to begin a new recording.")

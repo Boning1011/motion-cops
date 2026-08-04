@@ -48,6 +48,12 @@ full_cache = node.node("cpu_volume_cache")
 preview_cache = node.node("viewport_preview_cache")
 full_geometry = full_cache.geometry().freeze()
 preview_geometry = preview_cache.geometry().freeze()
+full_cache.parm("stash").set(hou.Geometry())
+preview_cache.parm("stash").set(hou.Geometry())
+
+node.allowEditingOfContents()
+node.node("FULL_CPU_VOLUME").parm("outputidx").set(0)
+node.node("VIEWPORT_PREVIEW").parm("outputidx").set(1)
 
 definition.updateFromNode(node)
 definition.setMinNumInputs(0)
@@ -83,9 +89,9 @@ continues it. Returning to the range start begins a fresh recording.
 @outputs
 
 output1:
-    Viewport Preview - progressive, low-resolution, and visualized.
+    Full CPU Volume - completed full-resolution dense volume for downstream use.
 output2:
-    Full CPU Volume - completed full-resolution dense volume.
+    Viewport Preview - progressive, low-resolution, and visualized.
 """,
 )
 patch_connector_labels(definition)
@@ -119,6 +125,7 @@ for parm_name, value in zip(("f1", "f2", "f3"), old_values["frame_range"]):
 
 node.node("cpu_volume_cache").parm("stash").set(full_geometry)
 node.node("viewport_preview_cache").parm("stash").set(preview_geometry)
+node.setOutputForViewFlag(0)
 
 module_scope = {}
 exec(

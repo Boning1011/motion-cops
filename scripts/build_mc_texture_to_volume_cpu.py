@@ -232,8 +232,8 @@ def patch_connector_labels(definition):
         len(lines),
     )
     lines[insert_at:insert_at] = [
-        '    outputlabel\t1\t"Viewport Preview"',
-        '    outputlabel\t2\t"Full CPU Volume"',
+        '    outputlabel\t1\t"Full CPU Volume"',
+        '    outputlabel\t2\t"Viewport Preview"',
         "",
     ]
     definition.sections()["DialogScript"].setContents("\n".join(lines) + "\n")
@@ -259,10 +259,10 @@ preview_filter.setParms({"fixedresample": 0, "scale": 1.0})
 visualize = subnet.createNode("volumevisualization", "viewport_density_visualization")
 visualize.setInput(0, preview_filter)
 preview_output = subnet.createNode("output", "VIEWPORT_PREVIEW")
-preview_output.parm("outputidx").set(0)
+preview_output.parm("outputidx").set(1)
 preview_output.setInput(0, visualize)
 full_output = subnet.createNode("output", "FULL_CPU_VOLUME")
-full_output.parm("outputidx").set(1)
+full_output.parm("outputidx").set(0)
 full_output.setInput(0, full_cache)
 
 full_cache.setPosition(hou.Vector2(1.5, 2.0))
@@ -312,9 +312,9 @@ before recording starts.
 @outputs
 
 output1:
-    Viewport Preview - progressive, low-resolution, and visualized.
+    Full CPU Volume - completed full-resolution dense volume for downstream use.
 output2:
-    Full CPU Volume - untouched full-resolution dense volume.
+    Viewport Preview - progressive, low-resolution, and visualized.
 """,
 )
 
