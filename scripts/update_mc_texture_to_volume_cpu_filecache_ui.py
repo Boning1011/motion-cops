@@ -24,6 +24,7 @@ def parm_value(name, default):
 
 
 old_values = {
+    "record_timeline": int(parm_value("record_timeline", 1)),
     "use_external_cop": int(parm_value("use_external_cop", 0)),
     "external_cop": str(parm_value("external_cop", "")),
     "output_index": int(parm_value("output_index", 0)),
@@ -40,9 +41,17 @@ old_values = {
     "channel": int(parm_value("channel", 0)),
     "flip_y": int(parm_value("flip_y", 0)),
     "preview_resolution": int(parm_value("preview_resolution", 256)),
+    "preview_update_interval": int(parm_value("preview_update_interval", 8)),
+    "live_viewport_updates": int(parm_value("live_viewport_updates", 1)),
+    "use_viewport_proxy": int(parm_value("use_viewport_proxy", 1)),
     "preview_density": float(parm_value("preview_density", 1.0)),
     "memory_limit_gib": float(parm_value("memory_limit_gib", 32.0)),
+    "status": str(parm_value("status", "Ready. Press Play to record.")),
 }
+recording_key = str(node.sessionId())
+active_recording = getattr(
+    hou.session, "_mc_texture_to_volume_cpu_live_recordings", {}
+).get(recording_key)
 
 full_cache = node.node("cpu_volume_cache")
 preview_cache = node.node("viewport_preview_cache")
@@ -58,7 +67,7 @@ node.node("VIEWPORT_PREVIEW").parm("outputidx").set(1)
 definition.updateFromNode(node)
 definition.setMinNumInputs(0)
 definition.setMaxNumInputs(1)
-definition.setMaxNumOutputs(2)
+definition.setMaxNumOutputs(1)
 definition.setParmTemplateGroup(build_parameter_interface())
 definition.addSection("PythonModule", hou.readFile(MODULE_SOURCE))
 definition.addSection("EditableNodes", "cpu_volume_cache viewport_preview_cache")
@@ -86,12 +95,15 @@ Resulting Volume reports exact X/Y/Z voxel resolution, normalized world size,
 and raw memory before recording. Pausing preserves progress and pressing Play
 continues it. Returning to the range start begins a fresh recording.
 
+The HDA exposes one production output: the full-resolution CPU volume. Use Low
+Resolution Proxy changes only the node's viewport display. Disable Show Live
+Viewport for the lowest display overhead, or raise Update Every N
+Slices to reduce 3D texture uploads.
+
 @outputs
 
 output1:
     Full CPU Volume - completed full-resolution dense volume for downstream use.
-output2:
-    Viewport Preview - progressive, low-resolution, and visualized.
 """,
 )
 patch_connector_labels(definition)
@@ -100,7 +112,7 @@ node.matchCurrentDefinition()
 
 node.setParms(
     {
-        "record_timeline": 1,
+        "record_timeline": old_values["record_timeline"],
         "use_external_cop": old_values["use_external_cop"],
         "external_cop": old_values["external_cop"],
         "output_index": old_values["output_index"],
@@ -112,10 +124,14 @@ node.setParms(
         "channel": old_values["channel"],
         "flip_y": old_values["flip_y"],
         "preview_resolution": old_values["preview_resolution"],
-        "preview_update_interval": 1,
+        "preview_update_interval": max(
+            8, old_values["preview_update_interval"]
+        ),
+        "live_viewport_updates": old_values["live_viewport_updates"],
+        "use_viewport_proxy": old_values["use_viewport_proxy"],
         "preview_density": old_values["preview_density"],
         "memory_limit_gib": old_values["memory_limit_gib"],
-        "status": "Ready. Press Play to record into CPU memory.",
+        "status": old_values["status"],
     }
 )
 for parm_name, value in zip(("f1", "f2", "f3"), old_values["frame_range"]):
@@ -125,7 +141,15 @@ for parm_name, value in zip(("f1", "f2", "f3"), old_values["frame_range"]):
 
 node.node("cpu_volume_cache").parm("stash").set(full_geometry)
 node.node("viewport_preview_cache").parm("stash").set(preview_geometry)
-node.setOutputForViewFlag(0)
+node.setOutputForViewFlag(1 if node.evalParm("use_viewport_proxy") else 0)
+if active_recording is not None:
+    active_recording["live_viewport"] = bool(
+        node.evalParm("live_viewport_updates")
+    )
+    active_recording["use_proxy"] = bool(node.evalParm("use_viewport_proxy"))
+    active_recording["preview_interval"] = int(
+        node.evalParm("preview_update_interval")
+    )
 
 module_scope = {}
 exec(

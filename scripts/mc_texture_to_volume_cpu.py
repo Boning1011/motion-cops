@@ -468,6 +468,28 @@ def settings_changed(kwargs):
     _arm_current_frame(node)
 
 
+def viewport_settings_changed(kwargs):
+    node = kwargs.get("node")
+    if node is None:
+        return
+    use_proxy = bool(node.evalParm("use_viewport_proxy"))
+    live_updates = bool(node.evalParm("live_viewport_updates"))
+    node.setOutputForViewFlag(1 if use_proxy else 0)
+    state = _live_recordings().get(str(node.sessionId()))
+    if state is not None:
+        state["use_proxy"] = use_proxy
+        state["live_viewport"] = live_updates
+        state["preview_interval"] = max(
+            1, int(node.evalParm("preview_update_interval"))
+        )
+        if live_updates:
+            if use_proxy:
+                _refresh_live_preview(node, state)
+            node.setDisplayFlag(True)
+        elif not live_updates and node.isDisplayFlagSet():
+            node.setDisplayFlag(False)
+
+
 def _prepare_live_recording(node, config):
     full_geo, full_volume = _new_volume_geometry(
         config["dims"], config["bbox"], node.evalParm("volume_name")
@@ -540,6 +562,8 @@ def _prepare_live_recording(node, config):
             "preview_interval": max(
                 1, int(node.evalParm("preview_update_interval"))
             ),
+            "live_viewport": bool(node.evalParm("live_viewport_updates")),
+            "use_proxy": bool(node.evalParm("use_viewport_proxy")),
             "started": time.perf_counter(),
             "value_min": float("inf"),
             "value_max": float("-inf"),
@@ -549,10 +573,16 @@ def _prepare_live_recording(node, config):
     preview_cache = node.node("viewport_preview_cache")
     if preview_cache is None:
         raise hou.NodeError("Internal Viewport Preview Cache node is missing.")
-    preview_cache.parm("stash").set(preview_geo)
-    preview_cache.cook(force=True)
-    node.setOutputForViewFlag(1)
-    node.setDisplayFlag(True)
+    if state["live_viewport"]:
+        if state["use_proxy"]:
+            preview_cache.parm("stash").set(preview_geo)
+            preview_cache.cook(force=True)
+        node.setOutputForViewFlag(1 if state["use_proxy"] else 0)
+        node.setDisplayFlag(True)
+    else:
+        node.setOutputForViewFlag(1 if state["use_proxy"] else 0)
+        if not state["live_viewport"] and node.isDisplayFlagSet():
+            node.setDisplayFlag(False)
     return state
 
 
@@ -598,7 +628,7 @@ def _commit_live_recording(node, state):
     full_cache.parm("stash").set(state["full_geo"])
     full_cache.cook(force=True)
     _refresh_live_preview(node, state)
-    node.setOutputForViewFlag(0)
+    node.setOutputForViewFlag(1 if node.evalParm("use_viewport_proxy") else 0)
     listener = _live_listeners().get(state["key"])
     if listener is not None:
         listener["completed_config_id"] = state["config_id"]
@@ -645,9 +675,13 @@ def _write_live_values(node, state, frame, index, values, width, height):
     state["last_frame"] = frame
     captured_count = len(state["captured"])
     if (
+        state["live_viewport"]
+        and state["use_proxy"]
+        and (
         captured_count == 1
         or captured_count == state["count"]
         or captured_count % state["preview_interval"] == 0
+        )
     ):
         _refresh_live_preview(node, state)
     if captured_count == state["count"]:
@@ -845,7 +879,8 @@ def _timeline_stopped(node, frame):
     _restore_playback_settings(node)
     state = _live_recordings().get(str(node.sessionId()))
     if state is not None:
-        _refresh_live_preview(node, state)
+        if state["live_viewport"] and state["use_proxy"]:
+            _refresh_live_preview(node, state)
         _set_status(
             node,
             "Paused at {}/{} slices. Press Play to continue | {}".format(
@@ -876,7 +911,7 @@ def install_live(kwargs):
                 pass
 
     node_path = node.path()
-    node.setOutputForViewFlag(0)
+    node.setOutputForViewFlag(1 if node.evalParm("use_viewport_proxy") else 0)
     node_events = (
         hou.nodeEventType.InputRewired,
         hou.nodeEventType.BeingDeleted,
@@ -1274,5 +1309,5 @@ def clear(kwargs):
         if cache is not None:
             cache.parm("stash").set(hou.Geometry())
             cache.cook(force=True)
-    node.setOutputForViewFlag(0)
+    node.setOutputForViewFlag(1 if node.evalParm("use_viewport_proxy") else 0)
     _set_status(node, "Memory cleared. Press Play to begin a new recording.")

@@ -31,6 +31,14 @@ def settings_callback(parm):
     return parm
 
 
+def viewport_callback(parm):
+    parm.setScriptCallback(
+        'exec(kwargs["node"].type().definition().sections()["PythonModule"].contents());viewport_settings_changed(kwargs)'
+    )
+    parm.setScriptCallbackLanguage(hou.scriptLanguage.Python)
+    return parm
+
+
 def heading(name, text):
     parm = hou.LabelParmTemplate(name, name, column_labels=(text,))
     parm.setTags({"sidefx::look": "block"})
@@ -155,6 +163,20 @@ def build_parameter_interface():
 
     main.addParmTemplate(hou.SeparatorParmTemplate("viewport_sep"))
     main.addParmTemplate(heading("viewport_heading", "VIEWPORT"))
+    live_updates = hou.ToggleParmTemplate(
+        "live_viewport_updates", "Show Live Viewport", default_value=True
+    )
+    live_updates.setHelp(
+        "Disable this to hide the HDA and stop viewport texture uploads while recording. CPU recording continues normally."
+    )
+    main.addParmTemplate(viewport_callback(live_updates))
+    use_proxy = hou.ToggleParmTemplate(
+        "use_viewport_proxy", "Use Low Resolution Proxy", default_value=True
+    )
+    use_proxy.setHelp(
+        "Display the internal proxy in the viewport. The HDA's single output always remains full resolution."
+    )
+    main.addParmTemplate(viewport_callback(use_proxy))
     main.addParmTemplate(
         settings_callback(hou.IntParmTemplate(
             "preview_resolution",
@@ -165,16 +187,18 @@ def build_parameter_interface():
             max=1024,
         ))
     )
-    main.addParmTemplate(
-        settings_callback(hou.IntParmTemplate(
+    update_interval = hou.IntParmTemplate(
             "preview_update_interval",
             "Update Every N Slices",
             1,
-            default_value=(1,),
+            default_value=(8,),
             min=1,
             max=128,
-        ))
     )
+    update_interval.setHelp(
+        "Higher values reduce viewport texture uploads. They do not change recorded volume resolution."
+    )
+    main.addParmTemplate(viewport_callback(update_interval))
     main.addParmTemplate(
         hou.FloatParmTemplate(
             "preview_density",
@@ -233,7 +257,6 @@ def patch_connector_labels(definition):
     )
     lines[insert_at:insert_at] = [
         '    outputlabel\t1\t"Full CPU Volume"',
-        '    outputlabel\t2\t"Viewport Preview"',
         "",
     ]
     definition.sections()["DialogScript"].setContents("\n".join(lines) + "\n")
@@ -282,7 +305,7 @@ asset = subnet.createDigitalAsset(
     ignore_external_references=True,
 )
 definition = asset.type().definition()
-definition.setMaxNumOutputs(2)
+definition.setMaxNumOutputs(1)
 definition.setParmTemplateGroup(build_parameter_interface())
 definition.addSection("PythonModule", hou.readFile(MODULE_SOURCE))
 definition.addSection("EditableNodes", "cpu_volume_cache viewport_preview_cache")
@@ -304,6 +327,11 @@ timeline sample into its corresponding slice. Playback is temporarily switched
 to play-every-frame mode so no samples are skipped. Pausing preserves progress;
 press Play again to continue.
 
+The HDA exposes one production output: the full-resolution CPU volume. Use Low
+Resolution Proxy affects only the node's viewport display. Show Live Viewport
+can be disabled entirely, and Update Every N Slices controls texture upload
+frequency while it is enabled.
+
 The source width is normalized to one world unit. Source aspect ratio controls
 the other image dimension, and frame count controls the stack dimension. The
 Resulting Volume field reports exact voxel resolution, world size, and raw RAM
@@ -313,8 +341,6 @@ before recording starts.
 
 output1:
     Full CPU Volume - completed full-resolution dense volume for downstream use.
-output2:
-    Viewport Preview - progressive, low-resolution, and visualized.
 """,
 )
 
@@ -324,7 +350,7 @@ visualize.parm("densityscale").setExpression('ch("../preview_density")', hou.exp
 definition.updateFromNode(asset)
 definition.setMinNumInputs(0)
 definition.setMaxNumInputs(1)
-definition.setMaxNumOutputs(2)
+definition.setMaxNumOutputs(1)
 definition.setParmTemplateGroup(build_parameter_interface())
 definition.addSection("PythonModule", hou.readFile(MODULE_SOURCE))
 definition.addSection("EditableNodes", "cpu_volume_cache viewport_preview_cache")
