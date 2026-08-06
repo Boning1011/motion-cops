@@ -1,4 +1,4 @@
-"""Upgrade the live CPU texture-to-volume HDA to timeline recording UX."""
+"""Upgrade the CPU texture stack HDA to one growing sparse VDB output."""
 
 import hou
 
@@ -24,46 +24,75 @@ def parm_value(name, default):
 
 
 old_values = {
-    "record_timeline": int(parm_value("record_timeline", 1)),
     "use_external_cop": int(parm_value("use_external_cop", 0)),
     "external_cop": str(parm_value("external_cop", "")),
     "output_index": int(parm_value("output_index", 0)),
-    "trange": int(parm_value("trange", 1)),
     "frame_range": (
         float(parm_value("f1", 1.0)),
         float(parm_value("f2", 240.0)),
         float(parm_value("f3", 1.0)),
     ),
     "substeps": int(parm_value("substeps", 1)),
-    "initialize_sim": int(parm_value("initialize_sim", 1)),
     "stack_axis": int(parm_value("stack_axis", 0)),
     "volume_name": str(parm_value("volume_name", "density")),
     "channel": int(parm_value("channel", 0)),
     "flip_y": int(parm_value("flip_y", 0)),
-    "preview_resolution": int(parm_value("preview_resolution", 256)),
-    "preview_update_interval": int(parm_value("preview_update_interval", 8)),
-    "live_viewport_updates": int(parm_value("live_viewport_updates", 1)),
-    "use_viewport_proxy": int(parm_value("use_viewport_proxy", 1)),
-    "publish_while_playing": int(parm_value("publish_while_playing", 0)),
-    "preview_density": float(parm_value("preview_density", 1.0)),
-    "memory_limit_gib": float(parm_value("memory_limit_gib", 32.0)),
-    "status": str(parm_value("status", "Ready. Press Play to record.")),
+    "resolution": int(
+        parm_value("resolution", parm_value("preview_resolution", 256))
+    ),
 }
-recording_key = str(node.sessionId())
-active_recording = getattr(
-    hou.session, "_mc_texture_to_volume_cpu_live_recordings", {}
-).get(recording_key)
+display_flag = node.isDisplayFlagSet()
+
+if hou.playbar.isPlaying():
+    hou.playbar.stop()
 
 full_cache = node.node("cpu_volume_cache")
-preview_cache = node.node("viewport_preview_cache")
-full_geometry = full_cache.geometry().freeze()
-preview_geometry = preview_cache.geometry().freeze()
+slice_cache = node.node("viewport_preview_cache")
+if full_cache is None or slice_cache is None:
+    raise hou.NodeError("Required internal Stash nodes are missing.")
 full_cache.parm("stash").set(hou.Geometry())
-preview_cache.parm("stash").set(hou.Geometry())
+slice_cache.parm("stash").set(hou.Geometry())
 
 node.allowEditingOfContents()
-node.node("FULL_CPU_VOLUME").parm("outputidx").set(0)
-node.node("VIEWPORT_PREVIEW").parm("outputidx").set(1)
+convert = node.node("slice_to_vdb")
+if convert is None:
+    convert = node.createNode("convertvdb", "slice_to_vdb")
+convert.setInput(0, slice_cache)
+convert.setParms({"conversion": 1, "vdbclass": 2, "prune": 1})
+
+combine = node.node("vdb_accumulate")
+if combine is None:
+    combine = node.createNode("vdbcombine", "vdb_accumulate")
+combine.setInput(0, full_cache)
+combine.setInput(1, convert)
+combine.setParms(
+    {
+        "collation": "pairs",
+        "operation": "add",
+        "deactivate": 1,
+        "prune": 1,
+    }
+)
+
+full_output = node.node("FULL_CPU_VOLUME")
+if full_output is None:
+    full_output = node.createNode("output", "FULL_CPU_VOLUME")
+full_output.parm("outputidx").set(0)
+full_output.setInput(0, full_cache)
+
+old_preview_output = node.node("VIEWPORT_PREVIEW")
+if old_preview_output is not None:
+    old_preview_output.setInput(0, None)
+    old_preview_output.setDisplayFlag(False)
+    old_preview_output.setRenderFlag(False)
+
+full_cache.setComment("Growing sparse VDB simulation state")
+slice_cache.setComment("Current low-cost 2D source slice")
+full_cache.setPosition(hou.Vector2(-2.0, 1.5))
+slice_cache.setPosition(hou.Vector2(2.0, 1.5))
+convert.setPosition(hou.Vector2(2.0, 0.0))
+combine.setPosition(hou.Vector2(0.0, -1.5))
+full_output.setPosition(hou.Vector2(-2.0, -1.5))
 
 definition.updateFromNode(node)
 definition.setMinNumInputs(0)
@@ -84,32 +113,22 @@ definition.addSection(
     "Help",
     """= MC Texture to Volume CPU =
 
-An in-memory timeline recorder that stacks animated 2D COP/SOP slices into one
-dense Float32 volume in CPU RAM.
+A timeline-driven sparse VDB stack, designed to feel like a simple Pyro
+simulation. Connect a COP Network or cached 2D Volume, move to the range start,
+and press Play. The output grows by one sparse VDB slice per timeline sample.
 
-Connect a COP Network directly to input 1, enable Record While Playing, and
-press Play. The source resolution determines the image-plane voxel resolution;
-the frame range and Substeps determine the stack resolution. Playback is
-temporarily switched to play every frame so no samples are skipped.
+Resolution is the real output resolution. Use 128 or 256 while working. For a
+final cache, set Resolution to the source width, press Reset Simulation, replay,
+and connect a normal File Cache downstream. There is no separate proxy or hidden
+full-resolution mode.
 
-Resulting Volume reports exact X/Y/Z voxel resolution, normalized world size,
-and raw memory before recording. Pausing preserves progress and pressing Play
-continues it. Returning to the range start begins a fresh recording.
-
-The HDA exposes one production output: the full-resolution CPU volume. It is
-published after the first captured slice, whenever playback pauses, and when
-recording completes, so normal downstream SOPs can always consume it. Publish
-Full Output While Playing additionally republishes it every Update Every N
-Slices; this copies the entire dense volume and recooks downstream SOPs.
-
-Use Low Resolution Proxy changes only the node's viewport display. Disable Show
-Live Viewport for the lowest display overhead, or raise Update Every N Slices
-to reduce 3D texture uploads.
+Only the elapsed stack region exists. Early frames therefore have a small active
+bounding box, and empty background voxels remain sparse.
 
 @outputs
 
 output1:
-    Full CPU Volume - current full-resolution dense volume for downstream use.
+    Growing Sparse VDB - current simulation state for viewport and caching.
 """,
 )
 patch_connector_labels(definition)
@@ -118,27 +137,15 @@ node.matchCurrentDefinition()
 
 node.setParms(
     {
-        "record_timeline": old_values["record_timeline"],
         "use_external_cop": old_values["use_external_cop"],
         "external_cop": old_values["external_cop"],
         "output_index": old_values["output_index"],
-        "trange": old_values["trange"],
         "substeps": old_values["substeps"],
-        "initialize_sim": old_values["initialize_sim"],
         "stack_axis": old_values["stack_axis"],
         "volume_name": old_values["volume_name"],
         "channel": old_values["channel"],
         "flip_y": old_values["flip_y"],
-        "preview_resolution": old_values["preview_resolution"],
-        "preview_update_interval": max(
-            8, old_values["preview_update_interval"]
-        ),
-        "live_viewport_updates": old_values["live_viewport_updates"],
-        "use_viewport_proxy": old_values["use_viewport_proxy"],
-        "publish_while_playing": old_values["publish_while_playing"],
-        "preview_density": old_values["preview_density"],
-        "memory_limit_gib": old_values["memory_limit_gib"],
-        "status": old_values["status"],
+        "resolution": old_values["resolution"],
     }
 )
 for parm_name, value in zip(("f1", "f2", "f3"), old_values["frame_range"]):
@@ -146,21 +153,10 @@ for parm_name, value in zip(("f1", "f2", "f3"), old_values["frame_range"]):
     parm.deleteAllKeyframes()
     parm.set(value)
 
-node.node("cpu_volume_cache").parm("stash").set(full_geometry)
-node.node("viewport_preview_cache").parm("stash").set(preview_geometry)
-node.setOutputForViewFlag(1 if node.evalParm("use_viewport_proxy") else 0)
-if active_recording is not None:
-    active_recording["live_viewport"] = bool(
-        node.evalParm("live_viewport_updates")
-    )
-    active_recording["use_proxy"] = bool(node.evalParm("use_viewport_proxy"))
-    active_recording["preview_interval"] = int(
-        node.evalParm("preview_update_interval")
-    )
-    active_recording["publish_while_playing"] = bool(
-        node.evalParm("publish_while_playing")
-    )
-    active_recording.setdefault("last_published_count", 0)
+node.node("cpu_volume_cache").parm("stash").set(hou.Geometry())
+node.node("viewport_preview_cache").parm("stash").set(hou.Geometry())
+node.setOutputForViewFlag(0)
+node.setDisplayFlag(display_flag)
 
 module_scope = {}
 exec(
@@ -171,28 +167,18 @@ exec(
     ),
     module_scope,
 )
-if active_recording is not None and active_recording["captured"]:
-    module_scope["_publish_live_output"](
-        node, active_recording, complete=False
-    )
 module_scope["install_live"]({"node": node})
+module_scope["reset"]({"node": node})
 node.setSelected(True, clear_all_selected=True)
 
 print(
     {
         "node": node.path(),
         "input": node.input(0).path() if node.input(0) else None,
-        "record_timeline": node.evalParm("record_timeline"),
-        "voxel_resolution": node.evalParm("voxel_resolution"),
-        "world_size": node.evalParm("world_size"),
-        "raw_memory": node.evalParm("raw_memory"),
-        "peak_memory": node.evalParm("peak_memory"),
+        "resolution": node.evalParm("resolution"),
+        "source_resolution": node.evalParm("source_resolution"),
+        "output_resolution": node.evalParm("output_resolution"),
+        "outputs": definition.maxNumOutputs(),
         "sync": node.matchesCurrentDefinition(),
-        "full_cache_prims": node.node("cpu_volume_cache").geometry().intrinsicValue(
-            "primitivecount"
-        ),
-        "preview_cache_prims": node.node(
-            "viewport_preview_cache"
-        ).geometry().intrinsicValue("primitivecount"),
     }
 )

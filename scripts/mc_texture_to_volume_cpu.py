@@ -1,10 +1,4 @@
-"""PythonModule for boning::mc_texture_to_volume_cpu::1.0.
-
-The HDA behaves like an in-memory File Cache: it samples a frame range from a
-connected COP Network (or an optional external COP/SOP path), streams slices
-into one full-resolution CPU volume, and updates a smaller viewport volume as
-the stack grows.
-"""
+"""Sparse VDB timeline recorder for boning::mc_texture_to_volume_cpu::1.0."""
 
 import math
 import time
@@ -19,20 +13,27 @@ def _set_status(node, message):
         parm.set(str(message))
 
 
-def _active_builds():
-    name = "_mc_texture_to_volume_cpu_builds"
-    builds = getattr(hou.session, name, None)
-    if builds is None:
-        builds = {}
-        setattr(hou.session, name, builds)
-    return builds
+def _recordings():
+    name = "_mc_texture_to_volume_cpu_live_recordings"
+    value = getattr(hou.session, name, None)
+    if value is None:
+        value = {}
+        setattr(hou.session, name, value)
+    return value
+
+
+def _listeners():
+    name = "_mc_texture_to_volume_cpu_live_listeners"
+    value = getattr(hou.session, name, None)
+    if value is None:
+        value = {}
+        setattr(hou.session, name, value)
+    return value
 
 
 def _resolve_path(node, path):
     result = hou.node(path)
-    if result is None:
-        result = node.node(path)
-    return result
+    return result if result is not None else node.node(path)
 
 
 def _as_source(candidate, output_index, label):
@@ -59,7 +60,7 @@ def _as_source(candidate, output_index, label):
             "output_index": output_index,
             "label": label,
         }
-    raise hou.NodeError("Source must be a COP node or a SOP that outputs a 2D volume.")
+    raise hou.NodeError("Source must be a COP node or a SOP with a 2D Volume.")
 
 
 def _source(node):
@@ -71,40 +72,35 @@ def _source(node):
         candidate = _resolve_path(node, path)
         if candidate is None:
             raise hou.NodeError("External COP does not exist: {}".format(path))
-        return _as_source(candidate, output_index, "External: {}".format(candidate.path()))
-
+        return _as_source(candidate, output_index, candidate.path())
     connections = node.inputConnections()
     if not connections:
         raise hou.NodeError(
-            "Connect a COP Network or cached 2D volume to input 1, "
-            "or enable Use External COP."
+            "Connect a COP Network or cached 2D Volume to input 1."
         )
     connection = connections[0]
     candidate = connection.inputNode()
     return _as_source(
         candidate,
         int(connection.outputIndex()),
-        "Input: {}".format(candidate.path()),
+        candidate.path(),
     )
 
 
 def _storage_layout(layer):
     storage = layer.storageType()
-    if storage == hou.imageLayerStorageType.Float32:
-        return np.float32, 1.0
-    if storage == hou.imageLayerStorageType.Float16:
-        return np.float16, 1.0
-    if storage == hou.imageLayerStorageType.Fixed8:
-        return np.uint8, 1.0 / 255.0
-    if storage == hou.imageLayerStorageType.Fixed16:
-        return np.uint16, 1.0 / 65535.0
-    if storage == hou.imageLayerStorageType.Int8:
-        return np.int8, 1.0
-    if storage == hou.imageLayerStorageType.Int16:
-        return np.int16, 1.0
-    if storage == hou.imageLayerStorageType.Int32:
-        return np.int32, 1.0
-    raise hou.NodeError("Unsupported COP storage type: {}".format(storage))
+    layouts = {
+        hou.imageLayerStorageType.Float32: (np.float32, 1.0),
+        hou.imageLayerStorageType.Float16: (np.float16, 1.0),
+        hou.imageLayerStorageType.Fixed8: (np.uint8, 1.0 / 255.0),
+        hou.imageLayerStorageType.Fixed16: (np.uint16, 1.0 / 65535.0),
+        hou.imageLayerStorageType.Int8: (np.int8, 1.0),
+        hou.imageLayerStorageType.Int16: (np.int16, 1.0),
+        hou.imageLayerStorageType.Int32: (np.int32, 1.0),
+    }
+    if storage not in layouts:
+        raise hou.NodeError("Unsupported COP storage type: {}".format(storage))
+    return layouts[storage]
 
 
 def _layer_values(layer, channel_mode, flip_y):
@@ -114,7 +110,6 @@ def _layer_values(layer, channel_mode, flip_y):
     image = np.frombuffer(layer.allBufferElements(), dtype=dtype).reshape(
         height, width, channels
     )
-
     if channel_mode == 5:
         if channels < 3:
             selected = image[:, :, 0]
@@ -134,7 +129,6 @@ def _layer_values(layer, channel_mode, flip_y):
                 )
             )
         selected = image[:, :, requested]
-
     if selected.dtype != np.float32:
         selected = selected.astype(np.float32)
     elif not selected.flags.c_contiguous:
@@ -150,10 +144,7 @@ def _first_dense_volume(geometry):
     for prim in geometry.iterPrims():
         if isinstance(prim, hou.Volume):
             return prim
-    raise hou.NodeError(
-        "The connected SOP does not contain a dense 2D Volume. "
-        "A File Cache after a COP Network is supported; convert VDBs to Volume first."
-    )
+    raise hou.NodeError("Connected SOP must contain a dense 2D Volume.")
 
 
 def _geometry_values(geometry, flip_y):
@@ -166,9 +157,7 @@ def _geometry_values(geometry, flip_y):
         width, height = xres, zres
         raw = volume.voxelSliceAsString("xz", 0)
     else:
-        raise hou.NodeError(
-            "Connected SOP volume must be 2D (one resolution axis must equal 1)."
-        )
+        raise hou.NodeError("Connected SOP Volume must be two dimensional.")
     selected = np.frombuffer(raw, dtype=np.float32).reshape(height, width)
     if flip_y:
         selected = np.ascontiguousarray(selected[::-1, :])
@@ -177,60 +166,61 @@ def _geometry_values(geometry, flip_y):
     return selected, width, height
 
 
-def _probe(source, frame, channel_mode, flip_y):
-    node = source["node"]
+def _probe(source, frame):
+    source_node = source["node"]
     output_index = source["output_index"]
     if source["kind"] == "cop":
-        layer = node.layerAtFrame(frame, output_index)
+        layer = source_node.layerAtFrame(frame, output_index)
         try:
-            width, height = (int(v) for v in layer.bufferResolution())
-            detail = "{} channel(s), {}".format(
-                layer.channelCount(), layer.storageType()
-            )
+            return tuple(int(v) for v in layer.bufferResolution())
         finally:
             layer.close()
-        return width, height, detail
-
-    geometry = node.geometryAtFrame(frame, output_index)
-    volume = _first_dense_volume(geometry)
+    volume = _first_dense_volume(source_node.geometryAtFrame(frame, output_index))
     xres, yres, zres = (int(v) for v in volume.resolution())
     if zres == 1:
-        width, height = xres, yres
-    elif yres == 1:
-        width, height = xres, zres
-    else:
-        raise hou.NodeError("Connected SOP volume is not a 2D slice.")
-    return width, height, "dense SOP volume"
+        return xres, yres
+    if yres == 1:
+        return xres, zres
+    raise hou.NodeError("Connected SOP Volume must be two dimensional.")
 
 
 def _capture(source, channel_mode, flip_y):
-    node = source["node"]
+    source_node = source["node"]
     output_index = source["output_index"]
     if source["kind"] == "cop":
-        layer = node.layer(output_index)
+        layer = source_node.layer(output_index)
         try:
             return _layer_values(layer, channel_mode, flip_y)
         finally:
             layer.close()
-    return _geometry_values(node.geometry(output_index), flip_y)
+    return _geometry_values(source_node.geometry(output_index), flip_y)
 
 
 def _sample_frames(node):
-    if int(node.evalParm("trange")) == 0:
-        return [float(hou.frame())]
-
     start, end, increment = (float(v) for v in node.evalParmTuple("f"))
     if end < start:
         raise hou.NodeError("End frame must be greater than or equal to Start.")
     if increment <= 0.0:
         raise hou.NodeError("Frame increment must be greater than zero.")
     substeps = max(1, int(node.evalParm("substeps")))
-    sample_step = increment / float(substeps)
-    count = int(math.floor((end - start) / sample_step + 1e-7)) + 1
-    frames = [start + i * sample_step for i in range(count)]
+    step = increment / float(substeps)
+    count = int(math.floor((end - start) / step + 1e-7)) + 1
+    frames = [start + index * step for index in range(count)]
     if frames[-1] < end - 1e-7:
         frames.append(end)
     return frames
+
+
+def _frame_index(state, frame):
+    frames = state["frames"]
+    if len(frames) == 1:
+        return 0 if abs(frame - frames[0]) < 1e-5 else None
+    step = frames[1] - frames[0]
+    index = int(round((frame - frames[0]) / step))
+    tolerance = max(1e-5, abs(step) * 1e-4)
+    if 0 <= index < len(frames) and abs(frame - frames[index]) <= tolerance:
+        return index
+    return None
 
 
 def _frame_text(frame):
@@ -239,183 +229,48 @@ def _frame_text(frame):
     return "{:.4f}".format(frame).rstrip("0").rstrip(".")
 
 
-def _layout(width, height, count, stack_axis):
-    # Normalize the source width to one Houdini unit.  Every source pixel and
-    # every timeline sample therefore has the same cubic voxel size.
-    normalized_width = 1.0
-    voxel_size = normalized_width / float(width)
-    image_height = voxel_size * height
-    stack_size = voxel_size * count
-    if stack_axis == 0:
-        dims = (width, count, height)
-        plane = "xz"
-        bbox = hou.BoundingBox(
-            -0.5 * normalized_width,
-            -0.5 * stack_size,
-            -0.5 * image_height,
-            0.5 * normalized_width,
-            0.5 * stack_size,
-            0.5 * image_height,
-        )
-    else:
-        dims = (width, height, count)
-        plane = "xy"
-        bbox = hou.BoundingBox(
-            -0.5 * normalized_width,
-            -0.5 * image_height,
-            -0.5 * stack_size,
-            0.5 * normalized_width,
-            0.5 * image_height,
-            0.5 * stack_size,
-        )
-    return dims, plane, bbox, voxel_size
-
-
-def _volume_summary(dims, width, raw_gib):
-    world = tuple(float(value) / float(width) for value in dims)
-    return (
-        "{} x {} x {} voxels  |  World {:.3f} x {:.3f} x {:.3f}  |  "
-        "{:.2f} GiB raw".format(
-            dims[0], dims[1], dims[2], world[0], world[1], world[2], raw_gib
-        )
-    )
-
-
-def _new_volume_geometry(dims, bbox, volume_name):
-    geometry = hou.Geometry()
-    volume = geometry.createVolume(dims[0], dims[1], dims[2], bbox)
-    name_attrib = geometry.addAttrib(hou.attribType.Prim, "name", "")
-    volume.setAttribValue(name_attrib, volume_name)
-    return geometry, volume
-
-
-def _preview_layout(full_dims, bbox, stack_axis, max_resolution):
-    scale = min(1.0, float(max_resolution) / float(max(full_dims)))
-    dims = tuple(max(1, int(round(v * scale))) for v in full_dims)
-    if stack_axis == 0:
-        plane = "xz"
-        image_width, image_height, stack_count = dims[0], dims[2], dims[1]
-    else:
-        plane = "xy"
-        image_width, image_height, stack_count = dims[0], dims[1], dims[2]
-    return dims, plane, bbox, image_width, image_height, stack_count
-
-
-def _restore_state(state, restore_sop_display):
-    cop_parent_path = state.get("cop_parent_path")
-    if cop_parent_path:
-        cop_parent = hou.node(cop_parent_path)
-        if cop_parent is not None:
-            old = set(state["old_cop_display"])
-            for child in cop_parent.children():
-                child.setDisplayFlag(child.path() in old)
-
-    if restore_sop_display:
-        sop_parent = hou.node(state["sop_parent_path"])
-        if sop_parent is not None:
-            old = set(state["old_sop_display"])
-            for child in sop_parent.children():
-                child.setDisplayFlag(child.path() in old)
-    hou.setFrame(state["old_frame"])
-
-
-def _remove_callback(state):
-    callback = state.get("callback")
-    if callback is not None:
-        try:
-            hou.ui.removeEventLoopCallback(callback)
-        except hou.OperationFailed:
-            pass
-        state["callback"] = None
-    _active_builds().pop(state["key"], None)
-
-
-def _cancel_state(state, message, restore_sop_display=False):
-    node = hou.node(state["node_path"])
-    _remove_callback(state)
-    _restore_state(state, restore_sop_display=restore_sop_display)
-    if node is not None:
-        _set_status(node, message)
-
-
-def _live_recordings():
-    name = "_mc_texture_to_volume_cpu_live_recordings"
-    recordings = getattr(hou.session, name, None)
-    if recordings is None:
-        recordings = {}
-        setattr(hou.session, name, recordings)
-    return recordings
-
-
-def _live_listeners():
-    name = "_mc_texture_to_volume_cpu_live_listeners"
-    listeners = getattr(hou.session, name, None)
-    if listeners is None:
-        listeners = {}
-        setattr(hou.session, name, listeners)
-    return listeners
-
-
 def _configuration(node):
     source = _source(node)
     frames = _sample_frames(node)
-    channel_mode = int(node.evalParm("channel"))
-    flip_y = bool(node.evalParm("flip_y"))
-    width, height, detail = _probe(
-        source, frames[0], channel_mode, flip_y
-    )
+    source_width, source_height = _probe(source, frames[0])
+    requested = max(16, int(node.evalParm("resolution")))
+    width = min(source_width, requested)
+    height = max(1, int(round(source_height * width / float(source_width))))
     count = len(frames)
-    raw_gib = width * height * count * 4.0 / (1024.0 ** 3)
-    limit_gib = float(node.evalParm("memory_limit_gib"))
-    if raw_gib > limit_gib:
-        raise hou.NodeError(
-            "Volume needs {:.2f} GiB before preview/cache overhead; "
-            "Memory Limit is {:.2f} GiB.".format(raw_gib, limit_gib)
-        )
-    stack_axis = int(node.evalParm("stack_axis"))
-    dims, plane, bbox, voxel_size = _layout(
-        width, height, count, stack_axis
-    )
+    axis = int(node.evalParm("stack_axis"))
+    dims = (width, count, height) if axis == 0 else (width, height, count)
+    voxel_size = 1.0 / float(width)
     config_id = repr(
         (
             source["kind"],
             source["node"].path(),
             source["output_index"],
             tuple(round(value, 7) for value in frames),
+            source_width,
+            source_height,
             width,
             height,
-            stack_axis,
-            channel_mode,
-            flip_y,
+            axis,
+            int(node.evalParm("channel")),
+            bool(node.evalParm("flip_y")),
             node.evalParm("volume_name"),
-            int(node.evalParm("preview_resolution")),
         )
     )
     return {
         "source": source,
         "frames": frames,
-        "channel_mode": channel_mode,
-        "flip_y": flip_y,
+        "source_width": source_width,
+        "source_height": source_height,
         "width": width,
         "height": height,
-        "detail": detail,
         "count": count,
-        "raw_gib": raw_gib,
-        "stack_axis": stack_axis,
+        "axis": axis,
         "dims": dims,
-        "plane": plane,
-        "bbox": bbox,
         "voxel_size": voxel_size,
+        "channel": int(node.evalParm("channel")),
+        "flip_y": bool(node.evalParm("flip_y")),
+        "volume_name": node.evalParm("volume_name"),
         "config_id": config_id,
-        "voxel_text": "{} x {} x {}".format(dims[0], dims[1], dims[2]),
-        "world_text": "{:.3f} x {:.3f} x {:.3f}".format(
-            dims[0] / float(width),
-            dims[1] / float(width),
-            dims[2] / float(width),
-        ),
-        "memory_text": "{:.2f} GiB".format(raw_gib),
-        "peak_memory_text": "about {:.2f} GiB".format(raw_gib * 2.0),
-        "summary": _volume_summary(dims, width, raw_gib),
     }
 
 
@@ -423,348 +278,288 @@ def refresh_info(kwargs):
     node = kwargs.get("node")
     if node is None:
         return
-    info_parms = {
-        "voxel_resolution": node.parm("voxel_resolution"),
-        "world_size": node.parm("world_size"),
-        "raw_memory": node.parm("raw_memory"),
-        "peak_memory": node.parm("peak_memory"),
-    }
     try:
         config = _configuration(node)
-        for parm_name, config_name in (
-            ("voxel_resolution", "voxel_text"),
-            ("world_size", "world_text"),
-            ("raw_memory", "memory_text"),
-            ("peak_memory", "peak_memory_text"),
-        ):
-            parm = info_parms[parm_name]
-            if parm is not None:
-                parm.set(config[config_name])
-        key = str(node.sessionId())
-        if key not in _live_recordings() and not hou.playbar.isPlaying():
+        node.parm("source_resolution").set(
+            "{} x {}".format(config["source_width"], config["source_height"])
+        )
+        node.parm("output_resolution").set(
+            "{} x {} x {}".format(*config["dims"])
+        )
+        if str(node.sessionId()) not in _recordings() and not hou.playbar.isPlaying():
             _set_status(
                 node,
-                "Ready. Press Play to record {} samples into CPU memory.".format(
-                    config["count"]
+                "Ready. Resolution {} is the real VDB output. Press Play from frame {}.".format(
+                    config["width"], _frame_text(config["frames"][0])
                 ),
             )
     except Exception as exc:
-        for parm in info_parms.values():
+        for name in ("source_resolution", "output_resolution"):
+            parm = node.parm(name)
             if parm is not None:
                 parm.set("Unavailable")
         if not hou.playbar.isPlaying():
             _set_status(node, "Source unavailable: {}".format(exc))
 
 
-def settings_changed(kwargs):
+def _clear_caches(node):
+    for name in ("cpu_volume_cache", "viewport_preview_cache"):
+        cache = node.node(name)
+        if cache is not None:
+            cache.parm("stash").set(hou.Geometry())
+            cache.cook(force=True)
+
+
+def _restore_playback_settings(node):
+    entry = _listeners().get(str(node.sessionId()))
+    settings = entry.get("playback_settings") if entry else None
+    if settings is None:
+        return
+    hou.playbar.setRealTime(settings["realtime"])
+    hou.playbar.setRealTimeSkipping(settings["skipping"])
+    entry["playback_settings"] = None
+
+
+def reset(kwargs):
     node = kwargs.get("node")
     if node is None:
         return
     if hou.playbar.isPlaying():
         hou.playbar.stop()
-        _set_status(node, "Playback stopped because recording settings changed.")
+    _restore_playback_settings(node)
+    _recordings().pop(str(node.sessionId()), None)
+    entry = _listeners().get(str(node.sessionId()))
+    if entry is not None:
+        entry["completed_config_id"] = None
+        entry["completed_frame"] = None
+        entry["armed"] = None
+    _clear_caches(node)
+    try:
+        source = _source(node)
+        resimulate = source["node"].parm("resimulate")
+        if resimulate is not None and resimulate.parmTemplate().type() == hou.parmTemplateType.Button:
+            resimulate.pressButton()
+    except Exception:
+        pass
+    try:
+        hou.setFrame(_sample_frames(node)[0])
+    except Exception:
+        pass
+    node.setOutputForViewFlag(0)
     refresh_info({"node": node})
-    _set_idle_frame_increment(node)
     _arm_current_frame(node)
 
 
-def viewport_settings_changed(kwargs):
-    node = kwargs.get("node")
-    if node is None:
-        return
-    use_proxy = bool(node.evalParm("use_viewport_proxy"))
-    live_updates = bool(node.evalParm("live_viewport_updates"))
-    node.setOutputForViewFlag(1 if use_proxy else 0)
-    state = _live_recordings().get(str(node.sessionId()))
-    if state is not None:
-        state["use_proxy"] = use_proxy
-        state["live_viewport"] = live_updates
-        state["preview_interval"] = max(
-            1, int(node.evalParm("preview_update_interval"))
-        )
-        if live_updates:
-            if use_proxy:
-                _refresh_live_preview(node, state)
-            node.setDisplayFlag(True)
-        elif not live_updates and node.isDisplayFlagSet():
-            node.setDisplayFlag(False)
+def settings_changed(kwargs):
+    reset(kwargs)
+    _set_idle_frame_increment(kwargs.get("node"))
 
 
-def output_settings_changed(kwargs):
-    node = kwargs.get("node")
-    if node is None:
-        return
-    state = _live_recordings().get(str(node.sessionId()))
-    if state is not None:
-        state["publish_while_playing"] = bool(
-            node.evalParm("publish_while_playing")
-        )
-
-
-def _prepare_live_recording(node, config):
-    full_geo, full_volume = _new_volume_geometry(
-        config["dims"], config["bbox"], node.evalParm("volume_name")
-    )
-    preview_max = max(16, int(node.evalParm("preview_resolution")))
-    (
-        preview_dims,
-        preview_plane,
-        preview_bbox,
-        preview_width,
-        preview_height,
-        preview_stack_count,
-    ) = _preview_layout(
-        config["dims"], config["bbox"], config["stack_axis"], preview_max
-    )
-    preview_geo, preview_volume = _new_volume_geometry(
-        preview_dims, preview_bbox, node.evalParm("volume_name")
-    )
-
-    for name, default in (
-        ("mc_source", ""),
-        ("mc_stack_axis", ""),
-        ("mc_config_id", ""),
-        ("mc_captured_indices", ""),
-    ):
-        full_geo.addAttrib(hou.attribType.Global, name, default)
-    for name, default in (
-        ("mc_sample_count", 0),
-        ("mc_substeps", 1),
-        ("mc_captured_count", 0),
-        ("mc_recording_complete", 0),
-    ):
-        full_geo.addAttrib(hou.attribType.Global, name, default)
-    for name in (
-        "mc_voxel_size",
-        "mc_record_seconds",
-        "mc_value_min",
-        "mc_value_max",
-    ):
-        full_geo.addAttrib(hou.attribType.Global, name, 0.0)
-    full_geo.setGlobalAttribValue("mc_source", config["source"]["label"])
-    full_geo.setGlobalAttribValue(
-        "mc_stack_axis", "Y" if config["stack_axis"] == 0 else "Z"
-    )
-    full_geo.setGlobalAttribValue("mc_config_id", config["config_id"])
-    full_geo.setGlobalAttribValue("mc_sample_count", config["count"])
-    full_geo.setGlobalAttribValue("mc_substeps", int(node.evalParm("substeps")))
-    full_geo.setGlobalAttribValue("mc_voxel_size", config["voxel_size"])
-
+def _prepare_recording(node, config):
+    _clear_caches(node)
     state = dict(config)
     state.update(
         {
             "key": str(node.sessionId()),
             "node_path": node.path(),
-            "full_geo": full_geo,
-            "full_volume": full_volume,
-            "preview_geo": preview_geo,
-            "preview_volume": preview_volume,
-            "preview_plane": preview_plane,
-            "preview_stack_count": preview_stack_count,
-            "preview_x": np.linspace(0, config["width"] - 1, preview_width).astype(
-                np.int64
-            ),
-            "preview_y": np.linspace(0, config["height"] - 1, preview_height).astype(
-                np.int64
-            ),
             "captured": set(),
-            "last_preview_index": -1,
             "last_frame": None,
-            "preview_interval": max(
-                1, int(node.evalParm("preview_update_interval"))
-            ),
-            "live_viewport": bool(node.evalParm("live_viewport_updates")),
-            "use_proxy": bool(node.evalParm("use_viewport_proxy")),
-            "publish_while_playing": bool(
-                node.evalParm("publish_while_playing")
-            ),
-            "last_published_count": 0,
             "started": time.perf_counter(),
             "value_min": float("inf"),
             "value_max": float("-inf"),
         }
     )
-    _live_recordings()[state["key"]] = state
-    preview_cache = node.node("viewport_preview_cache")
-    if preview_cache is None:
-        raise hou.NodeError("Internal Viewport Preview Cache node is missing.")
-    if state["live_viewport"]:
-        if state["use_proxy"]:
-            preview_cache.parm("stash").set(preview_geo)
-            preview_cache.cook(force=True)
-        node.setOutputForViewFlag(1 if state["use_proxy"] else 0)
-        node.setDisplayFlag(True)
-    else:
-        node.setOutputForViewFlag(1 if state["use_proxy"] else 0)
-        if not state["live_viewport"] and node.isDisplayFlagSet():
-            node.setDisplayFlag(False)
+    _recordings()[state["key"]] = state
     return state
 
 
-def _frame_index(state, frame):
-    frames = state["frames"]
-    if len(frames) == 1:
-        return 0 if abs(frame - frames[0]) < 1e-5 else None
-    step = frames[1] - frames[0]
-    if step <= 0.0:
-        return None
-    index = int(round((frame - frames[0]) / step))
-    candidates = (index, len(frames) - 1)
-    tolerance = max(1e-5, abs(step) * 1e-4)
-    for candidate in candidates:
-        if 0 <= candidate < len(frames):
-            if abs(frame - frames[candidate]) <= tolerance:
-                return candidate
-    return None
+def _downsample(values, width, height):
+    source_height, source_width = values.shape
+    if source_width == width and source_height == height:
+        return values
+    x_indices = np.linspace(0, source_width - 1, width).astype(np.int64)
+    y_indices = np.linspace(0, source_height - 1, height).astype(np.int64)
+    return np.ascontiguousarray(values[np.ix_(y_indices, x_indices)])
 
 
-def _refresh_live_preview(node, state):
-    preview_cache = node.node("viewport_preview_cache")
-    if preview_cache is not None:
-        preview_cache.parm("stash").set(state["preview_geo"])
-        preview_cache.cook(force=True)
-        hou.ui.triggerUpdate()
+def _slice_geometry(state, index, values):
+    width = state["width"]
+    height = state["height"]
+    voxel = state["voxel_size"]
+    image_height = height * voxel
+    if state["axis"] == 0:
+        dims = (width, 1, height)
+        plane = "xz"
+        bbox = hou.BoundingBox(
+            -0.5,
+            index * voxel,
+            -0.5 * image_height,
+            0.5,
+            (index + 1) * voxel,
+            0.5 * image_height,
+        )
+    else:
+        dims = (width, height, 1)
+        plane = "xy"
+        bbox = hou.BoundingBox(
+            -0.5,
+            -0.5 * image_height,
+            index * voxel,
+            0.5,
+            0.5 * image_height,
+            (index + 1) * voxel,
+        )
+    geometry = hou.Geometry()
+    volume = geometry.createVolume(dims[0], dims[1], dims[2], bbox)
+    name_attrib = geometry.addAttrib(hou.attribType.Prim, "name", "")
+    volume.setAttribValue(name_attrib, state["volume_name"])
+    volume.setVoxelSliceFromString(values.tobytes(order="C"), plane, 0)
+    return geometry
 
 
-def _publish_live_output(node, state, complete=False):
-    elapsed = time.perf_counter() - state["started"]
+def _set_detail(geometry, name, default, value):
+    if geometry.findGlobalAttrib(name) is None:
+        geometry.addAttrib(hou.attribType.Global, name, default)
+    geometry.setGlobalAttribValue(name, value)
+
+
+def _tag_output(source_geometry, state, complete):
+    geometry = hou.Geometry(source_geometry)
     captured = sorted(state["captured"])
-    state["full_geo"].setGlobalAttribValue(
-        "mc_captured_indices", ",".join(str(index) for index in captured)
+    current_layers = max(captured) + 1 if captured else 0
+    if state["axis"] == 0:
+        current_dims = (state["width"], current_layers, state["height"])
+    else:
+        current_dims = (state["width"], state["height"], current_layers)
+    _set_detail(geometry, "mc_source", "", state["source"]["label"])
+    _set_detail(
+        geometry,
+        "mc_stack_axis",
+        "",
+        "Y" if state["axis"] == 0 else "Z",
     )
-    state["full_geo"].setGlobalAttribValue("mc_captured_count", len(captured))
-    state["full_geo"].setGlobalAttribValue(
-        "mc_recording_complete", int(bool(complete))
+    _set_detail(geometry, "mc_config_id", "", state["config_id"])
+    _set_detail(
+        geometry,
+        "mc_captured_indices",
+        "",
+        ",".join(str(value) for value in captured),
     )
-    state["full_geo"].setGlobalAttribValue("mc_record_seconds", elapsed)
-    state["full_geo"].setGlobalAttribValue("mc_value_min", state["value_min"])
-    state["full_geo"].setGlobalAttribValue("mc_value_max", state["value_max"])
-    full_cache = node.node("cpu_volume_cache")
-    if full_cache is None:
-        raise hou.NodeError("Internal CPU Volume Cache node is missing.")
-    full_cache.parm("stash").set(state["full_geo"])
-    full_cache.cook(force=True)
-    state["last_published_count"] = len(captured)
-
-
-def _commit_live_recording(node, state):
-    elapsed = time.perf_counter() - state["started"]
-    _publish_live_output(node, state, complete=True)
-    _refresh_live_preview(node, state)
-    node.setOutputForViewFlag(1 if node.evalParm("use_viewport_proxy") else 0)
-    listener = _live_listeners().get(state["key"])
-    if listener is not None:
-        listener["completed_config_id"] = state["config_id"]
-        listener["completed_frame"] = state["last_frame"]
-    _live_recordings().pop(state["key"], None)
-    _set_status(
-        node,
-        "Recorded {} | {:.2f}s | values {:.5g}..{:.5g}".format(
-            state["summary"], elapsed, state["value_min"], state["value_max"]
-        ),
+    _set_detail(geometry, "mc_sample_count", 0, state["count"])
+    _set_detail(geometry, "mc_captured_count", 0, len(captured))
+    _set_detail(geometry, "mc_recording_complete", 0, int(bool(complete)))
+    _set_detail(geometry, "mc_voxel_size", 0.0, state["voxel_size"])
+    _set_detail(
+        geometry,
+        "mc_record_seconds",
+        0.0,
+        time.perf_counter() - state["started"],
     )
+    _set_detail(geometry, "mc_value_min", 0.0, state["value_min"])
+    _set_detail(geometry, "mc_value_max", 0.0, state["value_max"])
+    _set_detail(
+        geometry,
+        "mc_current_resolution",
+        "",
+        "{} x {} x {}".format(*current_dims),
+    )
+    return geometry, current_dims
 
 
-def _write_live_values(node, state, frame, index, values, width, height):
-    if width != state["width"] or height != state["height"]:
+def _append_slice(node, state, frame, index, values, width, height):
+    if width != state["source_width"] or height != state["source_height"]:
         raise hou.NodeError(
             "Source resolution changed at frame {}: {}x{}, expected {}x{}.".format(
-                _frame_text(frame), width, height, state["width"], state["height"]
+                _frame_text(frame),
+                width,
+                height,
+                state["source_width"],
+                state["source_height"],
             )
         )
-    state["full_volume"].setVoxelSliceFromString(
-        values.tobytes(order="C"), state["plane"], index
-    )
+    values = _downsample(values, state["width"], state["height"])
     state["value_min"] = min(state["value_min"], float(values.min()))
     state["value_max"] = max(state["value_max"], float(values.max()))
-    if state["count"] == 1:
-        preview_index = 0
-    else:
-        preview_index = int(
-            round(
-                index
-                * float(state["preview_stack_count"] - 1)
-                / float(state["count"] - 1)
-            )
-        )
-    preview_values = np.ascontiguousarray(
-        values[np.ix_(state["preview_y"], state["preview_x"])]
-    )
-    state["preview_volume"].setVoxelSliceFromString(
-        preview_values.tobytes(order="C"), state["preview_plane"], preview_index
-    )
-    state["last_preview_index"] = preview_index
+    first_slice = not state["captured"]
     state["captured"].add(index)
     state["last_frame"] = frame
-    captured_count = len(state["captured"])
-    if (
-        state["live_viewport"]
-        and state["use_proxy"]
-        and (
-        captured_count == 1
-        or captured_count == state["count"]
-        or captured_count % state["preview_interval"] == 0
-        )
+
+    slice_cache = node.node("viewport_preview_cache")
+    convert = node.node("slice_to_vdb")
+    combine = node.node("vdb_accumulate")
+    output_cache = node.node("cpu_volume_cache")
+    if any(
+        value is None for value in (slice_cache, convert, combine, output_cache)
     ):
-        _refresh_live_preview(node, state)
-    if captured_count == state["count"]:
-        _commit_live_recording(node, state)
+        raise hou.NodeError("Sparse VDB internal nodes are missing.")
+    slice_cache.parm("stash").set(_slice_geometry(state, index, values))
+    slice_cache.cook(force=True)
+    convert.cook(force=True)
+    if first_slice:
+        result = convert.geometry()
     else:
-        published = False
-        if captured_count == 1 or (
-            state["publish_while_playing"]
-            and captured_count % state["preview_interval"] == 0
-        ):
-            _publish_live_output(node, state, complete=False)
-            published = True
+        combine.cook(force=True)
+        result = combine.geometry()
+    complete = len(state["captured"]) == state["count"]
+    tagged, current_dims = _tag_output(result, state, complete)
+    output_cache.parm("stash").set(tagged)
+    output_cache.cook(force=True)
+    node.setOutputForViewFlag(0)
+
+    active_voxels = 0
+    output_geometry = output_cache.geometry()
+    if output_geometry.intrinsicValue("primitivecount"):
+        active_voxels = int(output_geometry.prim(0).activeVoxelCount())
+    if complete:
+        entry = _listeners().get(state["key"])
+        if entry is not None:
+            entry["completed_config_id"] = state["config_id"]
+            entry["completed_frame"] = state["last_frame"]
+        _recordings().pop(state["key"], None)
         _set_status(
             node,
-            "Recording {}/{} | frame {} | {}{}".format(
-                captured_count,
+            "Complete | {} x {} x {} | {:,} active VDB voxels".format(
+                current_dims[0], current_dims[1], current_dims[2], active_voxels
+            ),
+        )
+    else:
+        _set_status(
+            node,
+            "Growing {}/{} | {} x {} x {} | {:,} active VDB voxels".format(
+                len(state["captured"]),
                 state["count"],
-                _frame_text(frame),
-                state["summary"],
-                " | Full output updated" if published else "",
+                current_dims[0],
+                current_dims[1],
+                current_dims[2],
+                active_voxels,
             ),
         )
 
 
-def _capture_live_frame(node, state, frame):
+def _capture_frame(node, state, frame):
     index = _frame_index(state, frame)
     if index is None or index in state["captured"]:
         state["last_frame"] = frame
         return
-    source = _source(node)
     values, width, height = _capture(
-        source, state["channel_mode"], state["flip_y"]
+        _source(node), state["channel"], state["flip_y"]
     )
-    _write_live_values(node, state, frame, index, values, width, height)
+    _append_slice(node, state, frame, index, values, width, height)
 
 
 def _arm_current_frame(node, frame=None):
-    if not node.evalParm("record_timeline") or hou.playbar.isPlaying():
+    if node is None or hou.playbar.isPlaying():
         return
     if frame is None:
         frame = float(hou.frame())
     try:
         config = _configuration(node)
         index = _frame_index(config, frame)
-        if index is None:
+        entry = _listeners().get(str(node.sessionId()))
+        if index is None or entry is None:
             return
-        entry = _live_listeners().get(str(node.sessionId()))
-        if entry is None:
-            return
-        if (
-            index == 0
-            and node.evalParm("initialize_sim")
-            and entry.get("armed_reset_config_id") != config["config_id"]
-        ):
-            reset = config["source"]["node"].parm("resimulate")
-            if reset is not None and reset.parmTemplate().type() == hou.parmTemplateType.Button:
-                reset.pressButton()
-            entry["armed_reset_config_id"] = config["config_id"]
         values, width, height = _capture(
-            config["source"], config["channel_mode"], config["flip_y"]
+            config["source"], config["channel"], config["flip_y"]
         )
         entry["armed"] = {
             "config_id": config["config_id"],
@@ -779,7 +574,7 @@ def _arm_current_frame(node, frame=None):
 
 
 def _save_playback_settings(node):
-    entry = _live_listeners().get(str(node.sessionId()))
+    entry = _listeners().get(str(node.sessionId()))
     if entry is None or entry.get("playback_settings") is not None:
         return
     entry["playback_settings"] = {
@@ -790,73 +585,55 @@ def _save_playback_settings(node):
     hou.playbar.setRealTimeSkipping(False)
 
 
-def _restore_playback_settings(node):
-    entry = _live_listeners().get(str(node.sessionId()))
-    settings = entry.get("playback_settings") if entry else None
-    if settings is None:
-        return
-    hou.playbar.setRealTime(settings["realtime"])
-    hou.playbar.setRealTimeSkipping(settings["skipping"])
-    entry["playback_settings"] = None
-
-
 def _set_idle_frame_increment(node):
-    entry = _live_listeners().get(str(node.sessionId()))
+    if node is None:
+        return
+    entry = _listeners().get(str(node.sessionId()))
     if entry is None:
         return
-    if node.evalParm("record_timeline"):
-        frames = _sample_frames(node)
-        increment = frames[1] - frames[0] if len(frames) > 1 else 1.0
-        if abs(increment - round(increment)) > 1e-7:
-            hou.playbar.setUseIntegerFrames(False)
-        else:
-            hou.playbar.setUseIntegerFrames(entry["original_integer_frames"])
-        hou.playbar.setFrameIncrement(increment)
-    else:
-        original = entry.get("original_frame_increment")
-        if original is not None:
-            hou.playbar.setFrameIncrement(original)
-        hou.playbar.setUseIntegerFrames(entry["original_integer_frames"])
+    frames = _sample_frames(node)
+    increment = frames[1] - frames[0] if len(frames) > 1 else 1.0
+    hou.playbar.setUseIntegerFrames(
+        False
+        if abs(increment - round(increment)) > 1e-7
+        else entry["original_integer_frames"]
+    )
+    hou.playbar.setFrameIncrement(increment)
 
 
 def _timeline_started(node, frame):
-    if not node.evalParm("record_timeline"):
-        return
     _save_playback_settings(node)
     config = _configuration(node)
+    index = _frame_index(config, frame)
+    if index is None:
+        return
     key = str(node.sessionId())
-    listener = _live_listeners().get(key)
-    completed_same = (
-        listener is not None
-        and listener.get("completed_config_id") == config["config_id"]
-    )
-    completed_frame = listener.get("completed_frame") if listener else None
+    entry = _listeners().get(key)
     if (
-        completed_same
-        and completed_frame is not None
-        and frame >= completed_frame - 1e-5
+        entry is not None
+        and entry.get("completed_config_id") == config["config_id"]
+        and entry.get("completed_frame") is not None
+        and frame >= entry["completed_frame"] - 1e-5
     ):
         return
-    if _frame_index(config, frame) is None:
-        return
-    state = _live_recordings().get(key)
+    state = _recordings().get(key)
     wrapped = (
         state is not None
         and state["last_frame"] is not None
         and frame < state["last_frame"] - 1e-5
     )
     if state is None or state["config_id"] != config["config_id"] or wrapped:
-        if listener is not None:
-            listener["completed_config_id"] = None
-            listener["completed_frame"] = None
-        state = _prepare_live_recording(node, config)
-        armed = listener.get("armed") if listener else None
+        state = _prepare_recording(node, config)
+        if entry is not None:
+            entry["completed_config_id"] = None
+            entry["completed_frame"] = None
+        armed = entry.get("armed") if entry else None
         if (
             armed is not None
             and armed["config_id"] == config["config_id"]
-            and armed["index"] not in state["captured"]
+            and armed["index"] in (index, max(0, index - 1))
         ):
-            _write_live_values(
+            _append_slice(
                 node,
                 state,
                 armed["frame"],
@@ -865,59 +642,34 @@ def _timeline_started(node, frame):
                 armed["width"],
                 armed["height"],
             )
-        elif node.evalParm("initialize_sim"):
-            reset = config["source"]["node"].parm("resimulate")
-            if reset is not None and reset.parmTemplate().type() == hou.parmTemplateType.Button:
-                reset.pressButton()
-    if key in _live_recordings():
-        _capture_live_frame(node, state, frame)
+    if key in _recordings():
+        _capture_frame(node, state, frame)
 
 
 def _timeline_frame_changed(node, frame):
-    if not node.evalParm("record_timeline"):
-        return
     key = str(node.sessionId())
-    state = _live_recordings().get(key)
-    config = _configuration(node) if state is None else None
+    state = _recordings().get(key)
     if state is None:
-        listener = _live_listeners().get(key)
+        config = _configuration(node)
         if _frame_index(config, frame) is None:
             return
-        completed_same = (
-            listener is not None
-            and listener.get("completed_config_id") == config["config_id"]
-        )
-        completed_frame = listener.get("completed_frame") if listener else None
-        if (
-            completed_same
-            and completed_frame is not None
-            and frame >= completed_frame - 1e-5
-        ):
-            return
-        if listener is not None:
-            listener["completed_config_id"] = None
-            listener["completed_frame"] = None
-        state = _prepare_live_recording(node, config)
+        state = _prepare_recording(node, config)
     elif state["last_frame"] is not None and frame < state["last_frame"] - 1e-5:
-        state = _prepare_live_recording(node, _configuration(node))
-    _capture_live_frame(node, state, frame)
+        state = _prepare_recording(node, _configuration(node))
+    _capture_frame(node, state, frame)
 
 
 def _timeline_stopped(node, frame):
-    state = _live_recordings().get(str(node.sessionId()))
+    state = _recordings().get(str(node.sessionId()))
     if state is not None:
-        _capture_live_frame(node, state, frame)
+        _capture_frame(node, state, frame)
     _restore_playback_settings(node)
-    state = _live_recordings().get(str(node.sessionId()))
+    state = _recordings().get(str(node.sessionId()))
     if state is not None:
-        if state.get("last_published_count", 0) < len(state["captured"]):
-            _publish_live_output(node, state, complete=False)
-        if state["live_viewport"] and state["use_proxy"]:
-            _refresh_live_preview(node, state)
         _set_status(
             node,
-            "Paused at {}/{} slices. Press Play to continue | {}".format(
-                len(state["captured"]), state["count"], state["summary"]
+            "Paused at {}/{} slices. Press Play to continue.".format(
+                len(state["captured"]), state["count"]
             ),
         )
 
@@ -927,7 +679,7 @@ def install_live(kwargs):
     if node is None:
         return
     key = str(node.sessionId())
-    listeners = _live_listeners()
+    listeners = _listeners()
     old = listeners.pop(key, None)
     if old is not None:
         try:
@@ -937,18 +689,12 @@ def install_live(kwargs):
         old_node = hou.node(old["node_path"])
         if old_node is not None:
             try:
-                old_node.removeEventCallback(
-                    old["node_events"], old["node_callback"]
-                )
+                old_node.removeEventCallback(old["node_events"], old["node_callback"])
             except hou.OperationFailed:
                 pass
-
+    _recordings().pop(key, None)
     node_path = node.path()
-    node.setOutputForViewFlag(1 if node.evalParm("use_viewport_proxy") else 0)
-    node_events = (
-        hou.nodeEventType.InputRewired,
-        hou.nodeEventType.BeingDeleted,
-    )
+    node_events = (hou.nodeEventType.InputRewired, hou.nodeEventType.BeingDeleted)
 
     def playbar_callback(event_type, frame):
         active_node = hou.node(node_path)
@@ -956,17 +702,17 @@ def install_live(kwargs):
             return
         try:
             if event_type == hou.playbarEvent.Started:
-                _live_listeners()[key]["recording_active"] = True
+                _listeners()[key]["recording_active"] = True
                 _timeline_started(active_node, float(hou.frame()))
             elif event_type == hou.playbarEvent.FrameChanged:
-                entry = _live_listeners().get(key)
+                entry = _listeners().get(key)
                 if entry is not None and entry.get("recording_active"):
                     _timeline_frame_changed(active_node, float(hou.frame()))
                 else:
                     _arm_current_frame(active_node, float(hou.frame()))
             elif event_type == hou.playbarEvent.Stopped:
                 _timeline_stopped(active_node, float(hou.frame()))
-                entry = _live_listeners().get(key)
+                entry = _listeners().get(key)
                 if entry is not None:
                     entry["recording_active"] = False
             elif event_type in (
@@ -976,25 +722,23 @@ def install_live(kwargs):
                 refresh_info({"node": active_node})
         except Exception as exc:
             _restore_playback_settings(active_node)
-            _set_status(active_node, "Timeline recording failed: {}".format(exc))
+            _set_status(active_node, "Sparse VDB recording failed: {}".format(exc))
             if hou.playbar.isPlaying():
                 hou.playbar.stop()
 
     def node_callback(changed_node, event_type, **event_kwargs):
         if event_type == hou.nodeEventType.BeingDeleted:
-            entry = _live_listeners().pop(key, None)
+            entry = _listeners().pop(key, None)
             if entry is not None:
-                original = entry.get("original_frame_increment")
-                if original is not None:
-                    hou.playbar.setFrameIncrement(original)
+                hou.playbar.setFrameIncrement(entry["original_frame_increment"])
                 hou.playbar.setUseIntegerFrames(entry["original_integer_frames"])
                 try:
                     hou.playbar.removeEventCallback(entry["playbar_callback"])
                 except hou.OperationFailed:
                     pass
-            _live_recordings().pop(key, None)
+            _recordings().pop(key, None)
         elif event_type == hou.nodeEventType.InputRewired:
-            refresh_info({"node": changed_node})
+            reset({"node": changed_node})
 
     node.addEventCallback(node_events, node_callback)
     hou.playbar.addEventCallback(playbar_callback)
@@ -1009,338 +753,13 @@ def install_live(kwargs):
         "completed_config_id": None,
         "completed_frame": None,
         "armed": None,
-        "armed_reset_config_id": None,
         "recording_active": False,
     }
+    node.setOutputForViewFlag(0)
     refresh_info({"node": node})
     _set_idle_frame_increment(node)
     _arm_current_frame(node)
 
 
-def inspect_source(kwargs):
-    node = kwargs["node"]
-    try:
-        source = _source(node)
-        frames = _sample_frames(node)
-        width, height, detail = _probe(
-            source,
-            frames[0],
-            int(node.evalParm("channel")),
-            bool(node.evalParm("flip_y")),
-        )
-        raw_gib = width * height * len(frames) * 4.0 / (1024.0 ** 3)
-        axis = "Y Up" if int(node.evalParm("stack_axis")) == 0 else "Z Forward"
-        _set_status(
-            node,
-            "{} | {}x{} x {} samples | {} | {:.2f} GiB | {}".format(
-                source["label"], width, height, len(frames), detail, raw_gib, axis
-            ),
-        )
-    except Exception as exc:
-        _set_status(node, "Inspect failed: {}".format(exc))
-        raise
-
-
-def build(kwargs):
-    node = kwargs["node"]
-    key = str(node.sessionId())
-    previous = _active_builds().get(key)
-    if previous is not None:
-        _cancel_state(previous, "Previous build cancelled.")
-
-    _set_status(node, "Preparing volume build...")
-    try:
-        source = _source(node)
-        frames = _sample_frames(node)
-        channel_mode = int(node.evalParm("channel"))
-        flip_y = bool(node.evalParm("flip_y"))
-        width, height, detail = _probe(
-            source, frames[0], channel_mode, flip_y
-        )
-        count = len(frames)
-        raw_gib = width * height * count * 4.0 / (1024.0 ** 3)
-        limit_gib = float(node.evalParm("memory_limit_gib"))
-        if raw_gib > limit_gib:
-            raise hou.NodeError(
-                "Volume needs {:.2f} GiB before preview/Stash overhead; "
-                "Memory Limit is {:.2f} GiB.".format(raw_gib, limit_gib)
-            )
-
-        stack_axis = int(node.evalParm("stack_axis"))
-        full_dims, full_plane, bbox, voxel_size = _layout(
-            width, height, count, stack_axis
-        )
-        full_geo, full_volume = _new_volume_geometry(
-            full_dims, bbox, node.evalParm("volume_name")
-        )
-
-        preview_max = max(16, int(node.evalParm("preview_resolution")))
-        (
-            preview_dims,
-            preview_plane,
-            preview_bbox,
-            preview_width,
-            preview_height,
-            preview_stack_count,
-        ) = _preview_layout(full_dims, bbox, stack_axis, preview_max)
-        preview_geo, preview_volume = _new_volume_geometry(
-            preview_dims, preview_bbox, node.evalParm("volume_name")
-        )
-        preview_x = np.linspace(0, width - 1, preview_width).astype(np.int64)
-        preview_y = np.linspace(0, height - 1, preview_height).astype(np.int64)
-
-        for name, default in (
-            ("mc_source", ""),
-            ("mc_stack_axis", ""),
-        ):
-            full_geo.addAttrib(hou.attribType.Global, name, default)
-        for name, default in (
-            ("mc_sample_count", 0),
-            ("mc_substeps", 1),
-        ):
-            full_geo.addAttrib(hou.attribType.Global, name, default)
-        full_geo.addAttrib(hou.attribType.Global, "mc_voxel_size", 0.0)
-        full_geo.setGlobalAttribValue("mc_source", source["label"])
-        full_geo.setGlobalAttribValue(
-            "mc_stack_axis", "Y" if stack_axis == 0 else "Z"
-        )
-        full_geo.setGlobalAttribValue("mc_sample_count", count)
-        full_geo.setGlobalAttribValue("mc_substeps", int(node.evalParm("substeps")))
-        full_geo.setGlobalAttribValue("mc_voxel_size", voxel_size)
-
-        sop_parent = node.parent()
-        state = {
-            "key": key,
-            "node_path": node.path(),
-            "source": source,
-            "sop_parent_path": sop_parent.path(),
-            "old_sop_display": [
-                child.path() for child in sop_parent.children() if child.isDisplayFlagSet()
-            ],
-            "old_frame": hou.frame(),
-            "frames": frames,
-            "index": 0,
-            "phase": "set_frame",
-            "full_geo": full_geo,
-            "full_volume": full_volume,
-            "full_plane": full_plane,
-            "preview_geo": preview_geo,
-            "preview_volume": preview_volume,
-            "preview_plane": preview_plane,
-            "preview_stack_count": preview_stack_count,
-            "preview_x": preview_x,
-            "preview_y": preview_y,
-            "last_preview_index": -1,
-            "preview_interval": max(1, int(node.evalParm("preview_update_interval"))),
-            "width": width,
-            "height": height,
-            "raw_gib": raw_gib,
-            "channel_mode": channel_mode,
-            "flip_y": flip_y,
-            "started": time.perf_counter(),
-            "value_min": float("inf"),
-            "value_max": float("-inf"),
-            "callback": None,
-            "cop_parent_path": None,
-            "old_cop_display": [],
-        }
-
-        if source["kind"] == "cop":
-            cop_parent = source["node"].parent()
-            state["cop_parent_path"] = cop_parent.path()
-            state["old_cop_display"] = [
-                child.path() for child in cop_parent.children() if child.isDisplayFlagSet()
-            ]
-            source["node"].setDisplayFlag(True)
-
-        node.setOutputForViewFlag(1)
-        node.setDisplayFlag(True)
-        preview_cache = node.node("viewport_preview_cache")
-        if preview_cache is None:
-            raise hou.NodeError("Internal Viewport Preview Cache node is missing.")
-        preview_cache.parm("stash").set(preview_geo)
-        preview_cache.cook(force=True)
-
-        if node.evalParm("initialize_sim"):
-            reset = source["node"].parm("resimulate")
-            if reset is not None and reset.parmTemplate().type() == hou.parmTemplateType.Button:
-                reset.pressButton()
-        hou.setFrame(frames[0] - 1.0)
-
-        def tick():
-            active_node = hou.node(state["node_path"])
-            source_node = hou.node(state["source"]["node"].path())
-            if active_node is None or source_node is None:
-                _cancel_state(
-                    state,
-                    "Build stopped because a required node was removed.",
-                    restore_sop_display=True,
-                )
-                return
-            state["source"]["node"] = source_node
-            try:
-                index = state["index"]
-                frame = state["frames"][index]
-                if state["phase"] == "set_frame":
-                    hou.setFrame(frame)
-                    state["phase"] = "capture"
-                    _set_status(
-                        active_node,
-                        "Building frame {} | {}/{}".format(
-                            _frame_text(frame), index + 1, len(state["frames"])
-                        ),
-                    )
-                    return
-
-                values, frame_width, frame_height = _capture(
-                    state["source"], state["channel_mode"], state["flip_y"]
-                )
-                if frame_width != state["width"] or frame_height != state["height"]:
-                    raise hou.NodeError(
-                        "Source resolution changed at frame {}: {}x{}, expected {}x{}.".format(
-                            _frame_text(frame),
-                            frame_width,
-                            frame_height,
-                            state["width"],
-                            state["height"],
-                        )
-                    )
-                state["full_volume"].setVoxelSliceFromString(
-                    values.tobytes(order="C"), state["full_plane"], index
-                )
-                state["value_min"] = min(state["value_min"], float(values.min()))
-                state["value_max"] = max(state["value_max"], float(values.max()))
-
-                if len(state["frames"]) == 1:
-                    preview_index = 0
-                else:
-                    preview_index = int(
-                        round(
-                            index
-                            * float(state["preview_stack_count"] - 1)
-                            / float(len(state["frames"]) - 1)
-                        )
-                    )
-                if preview_index != state["last_preview_index"]:
-                    preview_values = np.ascontiguousarray(
-                        values[np.ix_(state["preview_y"], state["preview_x"])]
-                    )
-                    state["preview_volume"].setVoxelSliceFromString(
-                        preview_values.tobytes(order="C"),
-                        state["preview_plane"],
-                        preview_index,
-                    )
-                    state["last_preview_index"] = preview_index
-
-                state["index"] += 1
-                finished = state["index"] >= len(state["frames"])
-                refresh = (
-                    finished
-                    or state["index"] == 1
-                    or state["index"] % state["preview_interval"] == 0
-                )
-                if refresh:
-                    preview_cache = active_node.node("viewport_preview_cache")
-                    preview_cache.parm("stash").set(state["preview_geo"])
-                    preview_cache.cook(force=True)
-                    hou.ui.triggerUpdate()
-
-                if not finished:
-                    state["phase"] = "set_frame"
-                    _set_status(
-                        active_node,
-                        "Built {}/{} slices | next frame {}".format(
-                            state["index"],
-                            len(state["frames"]),
-                            _frame_text(state["frames"][state["index"]]),
-                        ),
-                    )
-                    return
-
-                elapsed = time.perf_counter() - state["started"]
-                for name, default in (
-                    ("mc_build_seconds", 0.0),
-                    ("mc_value_min", 0.0),
-                    ("mc_value_max", 0.0),
-                ):
-                    state["full_geo"].addAttrib(hou.attribType.Global, name, default)
-                state["full_geo"].setGlobalAttribValue("mc_build_seconds", elapsed)
-                state["full_geo"].setGlobalAttribValue("mc_value_min", state["value_min"])
-                state["full_geo"].setGlobalAttribValue("mc_value_max", state["value_max"])
-                full_cache = active_node.node("cpu_volume_cache")
-                full_cache.parm("stash").set(state["full_geo"])
-                full_cache.cook(force=True)
-                active_node.setOutputForViewFlag(0)
-
-                _remove_callback(state)
-                _restore_state(state, restore_sop_display=False)
-                axis = "Y Up" if int(active_node.evalParm("stack_axis")) == 0 else "Z Forward"
-                _set_status(
-                    active_node,
-                    "Built {}x{}x{} | {:.2f} GiB | {:.2f}s | {} | values {:.5g}..{:.5g}".format(
-                        state["full_volume"].resolution()[0],
-                        state["full_volume"].resolution()[1],
-                        state["full_volume"].resolution()[2],
-                        state["raw_gib"],
-                        elapsed,
-                        axis,
-                        state["value_min"],
-                        state["value_max"],
-                    ),
-                )
-            except Exception as exc:
-                _cancel_state(
-                    state,
-                    "Build failed: {}".format(exc),
-                    restore_sop_display=True,
-                )
-                raise
-
-        state["callback"] = tick
-        _active_builds()[key] = state
-        hou.ui.addEventLoopCallback(tick)
-        _set_status(
-            node,
-            "Build started | {} samples | {} | progressive preview every {} slices".format(
-                len(frames),
-                "Y Up" if stack_axis == 0 else "Z Forward",
-                state["preview_interval"],
-            ),
-        )
-    except Exception as exc:
-        _set_status(node, "Build failed: {}".format(exc))
-        raise
-
-
-def cancel(kwargs):
-    node = kwargs["node"]
-    state = _active_builds().get(str(node.sessionId()))
-    if state is None:
-        _set_status(node, "No active build to cancel.")
-        return
-    _cancel_state(
-        state,
-        "Build cancelled at {}/{} slices; partial preview preserved.".format(
-            state["index"], len(state["frames"])
-        ),
-        restore_sop_display=False,
-    )
-
-
 def clear(kwargs):
-    node = kwargs["node"]
-    _live_recordings().pop(str(node.sessionId()), None)
-    listener = _live_listeners().get(str(node.sessionId()))
-    if listener is not None:
-        listener["completed_config_id"] = None
-        listener["completed_frame"] = None
-    state = _active_builds().get(str(node.sessionId()))
-    if state is not None:
-        _cancel_state(state, "Build cancelled.", restore_sop_display=False)
-    for child_name in ("cpu_volume_cache", "viewport_preview_cache"):
-        cache = node.node(child_name)
-        if cache is not None:
-            cache.parm("stash").set(hou.Geometry())
-            cache.cook(force=True)
-    node.setOutputForViewFlag(1 if node.evalParm("use_viewport_proxy") else 0)
-    _set_status(node, "Memory cleared. Press Play to begin a new recording.")
+    reset(kwargs)
