@@ -490,6 +490,17 @@ def viewport_settings_changed(kwargs):
             node.setDisplayFlag(False)
 
 
+def output_settings_changed(kwargs):
+    node = kwargs.get("node")
+    if node is None:
+        return
+    state = _live_recordings().get(str(node.sessionId()))
+    if state is not None:
+        state["publish_while_playing"] = bool(
+            node.evalParm("publish_while_playing")
+        )
+
+
 def _prepare_live_recording(node, config):
     full_geo, full_volume = _new_volume_geometry(
         config["dims"], config["bbox"], node.evalParm("volume_name")
@@ -564,6 +575,10 @@ def _prepare_live_recording(node, config):
             ),
             "live_viewport": bool(node.evalParm("live_viewport_updates")),
             "use_proxy": bool(node.evalParm("use_viewport_proxy")),
+            "publish_while_playing": bool(
+                node.evalParm("publish_while_playing")
+            ),
+            "last_published_count": 0,
             "started": time.perf_counter(),
             "value_min": float("inf"),
             "value_max": float("-inf"),
@@ -611,14 +626,16 @@ def _refresh_live_preview(node, state):
         hou.ui.triggerUpdate()
 
 
-def _commit_live_recording(node, state):
+def _publish_live_output(node, state, complete=False):
     elapsed = time.perf_counter() - state["started"]
     captured = sorted(state["captured"])
     state["full_geo"].setGlobalAttribValue(
         "mc_captured_indices", ",".join(str(index) for index in captured)
     )
     state["full_geo"].setGlobalAttribValue("mc_captured_count", len(captured))
-    state["full_geo"].setGlobalAttribValue("mc_recording_complete", 1)
+    state["full_geo"].setGlobalAttribValue(
+        "mc_recording_complete", int(bool(complete))
+    )
     state["full_geo"].setGlobalAttribValue("mc_record_seconds", elapsed)
     state["full_geo"].setGlobalAttribValue("mc_value_min", state["value_min"])
     state["full_geo"].setGlobalAttribValue("mc_value_max", state["value_max"])
@@ -627,6 +644,12 @@ def _commit_live_recording(node, state):
         raise hou.NodeError("Internal CPU Volume Cache node is missing.")
     full_cache.parm("stash").set(state["full_geo"])
     full_cache.cook(force=True)
+    state["last_published_count"] = len(captured)
+
+
+def _commit_live_recording(node, state):
+    elapsed = time.perf_counter() - state["started"]
+    _publish_live_output(node, state, complete=True)
     _refresh_live_preview(node, state)
     node.setOutputForViewFlag(1 if node.evalParm("use_viewport_proxy") else 0)
     listener = _live_listeners().get(state["key"])
@@ -687,13 +710,21 @@ def _write_live_values(node, state, frame, index, values, width, height):
     if captured_count == state["count"]:
         _commit_live_recording(node, state)
     else:
+        published = False
+        if captured_count == 1 or (
+            state["publish_while_playing"]
+            and captured_count % state["preview_interval"] == 0
+        ):
+            _publish_live_output(node, state, complete=False)
+            published = True
         _set_status(
             node,
-            "Recording {}/{} | frame {} | {}".format(
+            "Recording {}/{} | frame {} | {}{}".format(
                 captured_count,
                 state["count"],
                 _frame_text(frame),
                 state["summary"],
+                " | Full output updated" if published else "",
             ),
         )
 
@@ -879,6 +910,8 @@ def _timeline_stopped(node, frame):
     _restore_playback_settings(node)
     state = _live_recordings().get(str(node.sessionId()))
     if state is not None:
+        if state.get("last_published_count", 0) < len(state["captured"]):
+            _publish_live_output(node, state, complete=False)
         if state["live_viewport"] and state["use_proxy"]:
             _refresh_live_preview(node, state)
         _set_status(

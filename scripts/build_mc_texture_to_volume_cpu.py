@@ -39,6 +39,14 @@ def viewport_callback(parm):
     return parm
 
 
+def output_callback(parm):
+    parm.setScriptCallback(
+        'exec(kwargs["node"].type().definition().sections()["PythonModule"].contents());output_settings_changed(kwargs)'
+    )
+    parm.setScriptCallbackLanguage(hou.scriptLanguage.Python)
+    return parm
+
+
 def heading(name, text):
     parm = hou.LabelParmTemplate(name, name, column_labels=(text,))
     parm.setTags({"sidefx::look": "block"})
@@ -133,7 +141,7 @@ def build_parameter_interface():
         ("voxel_resolution", "Voxel Resolution", "Unavailable"),
         ("world_size", "World Size", "Unavailable"),
         ("raw_memory", "Raw CPU Memory", "Unavailable"),
-        ("peak_memory", "Temporary Peak", "Unavailable"),
+        ("peak_memory", "Recording + Output RAM", "Unavailable"),
     ):
         result_info = hou.StringParmTemplate(
             parm_name, label, 1, default_value=(default,)
@@ -160,6 +168,18 @@ def build_parameter_interface():
     main.addParmTemplate(settings_callback(hou.ToggleParmTemplate(
         "flip_y", "Flip Source Y", default_value=False
     )))
+
+    main.addParmTemplate(hou.SeparatorParmTemplate("output_sep"))
+    main.addParmTemplate(heading("output_heading", "OUTPUT"))
+    publish_output = hou.ToggleParmTemplate(
+        "publish_while_playing",
+        "Publish Full Output While Playing",
+        default_value=False,
+    )
+    publish_output.setHelp(
+        "The full-resolution output is always published after the first slice, when playback pauses, and when recording completes. Enable this to also republish it every Update Every N Slices. Each publish copies the entire dense volume and recooks downstream SOPs."
+    )
+    main.addParmTemplate(output_callback(publish_output))
 
     main.addParmTemplate(hou.SeparatorParmTemplate("viewport_sep"))
     main.addParmTemplate(heading("viewport_heading", "VIEWPORT"))

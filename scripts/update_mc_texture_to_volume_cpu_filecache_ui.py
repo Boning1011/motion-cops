@@ -44,6 +44,7 @@ old_values = {
     "preview_update_interval": int(parm_value("preview_update_interval", 8)),
     "live_viewport_updates": int(parm_value("live_viewport_updates", 1)),
     "use_viewport_proxy": int(parm_value("use_viewport_proxy", 1)),
+    "publish_while_playing": int(parm_value("publish_while_playing", 0)),
     "preview_density": float(parm_value("preview_density", 1.0)),
     "memory_limit_gib": float(parm_value("memory_limit_gib", 32.0)),
     "status": str(parm_value("status", "Ready. Press Play to record.")),
@@ -95,15 +96,20 @@ Resulting Volume reports exact X/Y/Z voxel resolution, normalized world size,
 and raw memory before recording. Pausing preserves progress and pressing Play
 continues it. Returning to the range start begins a fresh recording.
 
-The HDA exposes one production output: the full-resolution CPU volume. Use Low
-Resolution Proxy changes only the node's viewport display. Disable Show Live
-Viewport for the lowest display overhead, or raise Update Every N
-Slices to reduce 3D texture uploads.
+The HDA exposes one production output: the full-resolution CPU volume. It is
+published after the first captured slice, whenever playback pauses, and when
+recording completes, so normal downstream SOPs can always consume it. Publish
+Full Output While Playing additionally republishes it every Update Every N
+Slices; this copies the entire dense volume and recooks downstream SOPs.
+
+Use Low Resolution Proxy changes only the node's viewport display. Disable Show
+Live Viewport for the lowest display overhead, or raise Update Every N Slices
+to reduce 3D texture uploads.
 
 @outputs
 
 output1:
-    Full CPU Volume - completed full-resolution dense volume for downstream use.
+    Full CPU Volume - current full-resolution dense volume for downstream use.
 """,
 )
 patch_connector_labels(definition)
@@ -129,6 +135,7 @@ node.setParms(
         ),
         "live_viewport_updates": old_values["live_viewport_updates"],
         "use_viewport_proxy": old_values["use_viewport_proxy"],
+        "publish_while_playing": old_values["publish_while_playing"],
         "preview_density": old_values["preview_density"],
         "memory_limit_gib": old_values["memory_limit_gib"],
         "status": old_values["status"],
@@ -150,6 +157,10 @@ if active_recording is not None:
     active_recording["preview_interval"] = int(
         node.evalParm("preview_update_interval")
     )
+    active_recording["publish_while_playing"] = bool(
+        node.evalParm("publish_while_playing")
+    )
+    active_recording.setdefault("last_published_count", 0)
 
 module_scope = {}
 exec(
@@ -160,6 +171,10 @@ exec(
     ),
     module_scope,
 )
+if active_recording is not None and active_recording["captured"]:
+    module_scope["_publish_live_output"](
+        node, active_recording, complete=False
+    )
 module_scope["install_live"]({"node": node})
 node.setSelected(True, clear_all_selected=True)
 
