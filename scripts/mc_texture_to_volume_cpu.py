@@ -196,6 +196,20 @@ def _capture(source, channel_mode, flip_y):
     return _geometry_values(source_node.geometry(output_index), flip_y)
 
 
+def _capture_at_frame(source, frame, channel_mode, flip_y):
+    source_node = source["node"]
+    output_index = source["output_index"]
+    if source["kind"] == "cop":
+        layer = source_node.layerAtFrame(frame, output_index)
+        try:
+            return _layer_values(layer, channel_mode, flip_y)
+        finally:
+            layer.close()
+    return _geometry_values(
+        source_node.geometryAtFrame(frame, output_index), flip_y
+    )
+
+
 def _sample_frames(node):
     start, end, increment = (float(v) for v in node.evalParmTuple("f"))
     if end < start:
@@ -221,6 +235,24 @@ def _frame_index(state, frame):
     if 0 <= index < len(frames) and abs(frame - frames[index]) <= tolerance:
         return index
     return None
+
+
+def _target_index(state, frame):
+    frames = state["frames"]
+    if frame < frames[0] - 1e-5:
+        return None
+    if frame >= frames[-1] - 1e-5:
+        return len(frames) - 1
+    if len(frames) == 1:
+        return 0
+    step = frames[1] - frames[0]
+    return max(
+        0,
+        min(
+            len(frames) - 1,
+            int(math.floor((frame - frames[0]) / step + 1e-7)),
+        ),
+    )
 
 
 def _frame_text(frame):
@@ -310,6 +342,18 @@ def _clear_caches(node):
             cache.cook(force=True)
 
 
+def _cancel_seek(entry):
+    callback = entry.get("seek_callback") if entry else None
+    if callback is not None:
+        try:
+            hou.ui.removeEventLoopCallback(callback)
+        except hou.OperationFailed:
+            pass
+        entry["seek_callback"] = None
+    if entry is not None:
+        entry["seek_target_index"] = None
+
+
 def _restore_playback_settings(node):
     entry = _listeners().get(str(node.sessionId()))
     settings = entry.get("playback_settings") if entry else None
@@ -330,6 +374,7 @@ def reset(kwargs):
     _recordings().pop(str(node.sessionId()), None)
     entry = _listeners().get(str(node.sessionId()))
     if entry is not None:
+        _cancel_seek(entry)
         entry["completed_config_id"] = None
         entry["completed_frame"] = None
         entry["armed"] = None
@@ -342,9 +387,14 @@ def reset(kwargs):
     except Exception:
         pass
     try:
+        if entry is not None:
+            entry["suppress_frame_trigger"] = True
         hou.setFrame(_sample_frames(node)[0])
     except Exception:
         pass
+    finally:
+        if entry is not None:
+            entry["suppress_frame_trigger"] = False
     node.setOutputForViewFlag(0)
     refresh_info({"node": node})
     _arm_current_frame(node)
@@ -353,6 +403,15 @@ def reset(kwargs):
 def settings_changed(kwargs):
     reset(kwargs)
     _set_idle_frame_increment(kwargs.get("node"))
+
+
+def display_settings_changed(kwargs):
+    node = kwargs.get("node")
+    if node is None:
+        return
+    visualize = node.node("viewport_density_visualization")
+    if visualize is not None:
+        visualize.cook(force=True)
 
 
 def _prepare_recording(node, config):
@@ -541,10 +600,129 @@ def _capture_frame(node, state, frame):
     if index is None or index in state["captured"]:
         state["last_frame"] = frame
         return
-    values, width, height = _capture(
-        _source(node), state["channel"], state["flip_y"]
+    values, width, height = _capture_at_frame(
+        _source(node), frame, state["channel"], state["flip_y"]
     )
     _append_slice(node, state, frame, index, values, width, height)
+
+
+def _capture_index(node, state, index):
+    if index in state["captured"]:
+        return
+    frame = state["frames"][index]
+    values, width, height = _capture_at_frame(
+        _source(node), frame, state["channel"], state["flip_y"]
+    )
+    _append_slice(node, state, frame, index, values, width, height)
+
+
+def _cook_through(node, state, target_index):
+    for index in range(target_index + 1):
+        if state["key"] not in _recordings():
+            break
+        if index not in state["captured"]:
+            _capture_index(node, state, index)
+
+
+def _request_cook_to_frame(node, frame):
+    key = str(node.sessionId())
+    entry = _listeners().get(key)
+    if entry is None or entry.get("seek_cooking"):
+        return
+    config = _configuration(node)
+    target_index = _target_index(config, frame)
+    if target_index is None:
+        _recordings().pop(key, None)
+        _clear_caches(node)
+        _set_status(
+            node,
+            "Before simulation start frame {}.".format(
+                _frame_text(config["frames"][0])
+            ),
+        )
+        return
+
+    state = _recordings().get(key)
+    current_max = max(state["captured"]) if state and state["captured"] else -1
+    completed_at_end = (
+        state is None
+        and entry.get("completed_config_id") == config["config_id"]
+        and target_index == config["count"] - 1
+    )
+    if completed_at_end:
+        return
+    if (
+        state is None
+        or state["config_id"] != config["config_id"]
+        or current_max > target_index
+    ):
+        state = _prepare_recording(node, config)
+        entry["completed_config_id"] = None
+        entry["completed_frame"] = None
+
+    missing = [
+        index
+        for index in range(target_index + 1)
+        if index not in state["captured"]
+    ]
+    if not missing:
+        _set_status(
+            node,
+            "Cooked to frame {} | {}/{} slices".format(
+                _frame_text(config["frames"][target_index]),
+                len(state["captured"]),
+                state["count"],
+            ),
+        )
+        return
+
+    target_text = _frame_text(config["frames"][target_index])
+    entry["seek_cooking"] = True
+    try:
+        with hou.InterruptableOperation(
+            "Cooking frames {} to {}".format(
+                _frame_text(config["frames"][missing[0]]), target_text
+            ),
+            "MC Texture to Volume",
+            open_interrupt_dialog=False,
+        ) as operation:
+            total = float(len(missing))
+            for progress_index, index in enumerate(missing):
+                current_text = _frame_text(config["frames"][index])
+                fraction = progress_index / total
+                operation.updateLongProgress(
+                    fraction,
+                    "Cooking frame {} / {}".format(current_text, target_text),
+                )
+                operation.updateProgress(fraction)
+                _capture_index(node, state, index)
+                if key not in _recordings():
+                    break
+            operation.updateProgress(1.0)
+    except hou.OperationInterrupted:
+        current_state = _recordings().get(key)
+        captured_count = len(current_state["captured"]) if current_state else 0
+        _set_status(
+            node,
+            "Cook interrupted at {}/{} slices.".format(
+                captured_count, config["count"]
+            ),
+        )
+    finally:
+        entry["seek_cooking"] = False
+
+    current_state = _recordings().get(key)
+    if current_state is not None and all(
+        index in current_state["captured"] for index in range(target_index + 1)
+    ):
+        _set_status(
+            node,
+            "Cooked to frame {} | {}/{} slices".format(
+                target_text,
+                len(current_state["captured"]),
+                current_state["count"],
+            ),
+        )
 
 
 def _arm_current_frame(node, frame=None):
@@ -706,10 +884,12 @@ def install_live(kwargs):
                 _timeline_started(active_node, float(hou.frame()))
             elif event_type == hou.playbarEvent.FrameChanged:
                 entry = _listeners().get(key)
+                if entry is not None and entry.get("suppress_frame_trigger"):
+                    return
                 if entry is not None and entry.get("recording_active"):
                     _timeline_frame_changed(active_node, float(hou.frame()))
                 else:
-                    _arm_current_frame(active_node, float(hou.frame()))
+                    _request_cook_to_frame(active_node, float(hou.frame()))
             elif event_type == hou.playbarEvent.Stopped:
                 _timeline_stopped(active_node, float(hou.frame()))
                 entry = _listeners().get(key)
@@ -754,6 +934,8 @@ def install_live(kwargs):
         "completed_frame": None,
         "armed": None,
         "recording_active": False,
+        "seek_cooking": False,
+        "suppress_frame_trigger": False,
     }
     node.setOutputForViewFlag(0)
     refresh_info({"node": node})

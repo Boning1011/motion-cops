@@ -146,6 +146,18 @@ def build_parameter_interface():
             )
         )
     )
+    display_density = hou.FloatParmTemplate(
+        "display_density",
+        "Display Density",
+        1,
+        default_value=(1000.0,),
+        min=0.0,
+        max=10000.0,
+    )
+    display_density.setHelp(
+        "Viewport-only density scale. This does not change the VDB values or cached data."
+    )
+    main.addParmTemplate(display_density)
     main.addParmTemplate(result_string("source_resolution", "Source Resolution"))
     main.addParmTemplate(result_string("output_resolution", "Final Resolution"))
     status = hou.StringParmTemplate(
@@ -204,14 +216,25 @@ def configure_sparse_nodes(asset):
             "prune": 1,
         }
     )
+    visualize = asset.createNode(
+        "volumevisualization", "viewport_density_visualization"
+    )
+    visualize.setInput(0, accumulated)
+    visualize.parm("densityfield").setExpression(
+        'chs("../volume_name")', hou.exprLanguage.Hscript
+    )
+    visualize.parm("densityscale").setExpression(
+        'ch("../display_density")', hou.exprLanguage.Hscript
+    )
     output = asset.createNode("output", "VDB_OUTPUT")
     output.parm("outputidx").set(0)
-    output.setInput(0, accumulated)
+    output.setInput(0, visualize)
     accumulated.setPosition(hou.Vector2(-2.0, 1.5))
     current_slice.setPosition(hou.Vector2(2.0, 1.5))
     convert.setPosition(hou.Vector2(2.0, 0.0))
     combine.setPosition(hou.Vector2(0.0, -1.5))
-    output.setPosition(hou.Vector2(-2.0, -1.5))
+    visualize.setPosition(hou.Vector2(-2.0, -0.25))
+    output.setPosition(hou.Vector2(-2.0, -2.0))
     return accumulated, current_slice
 
 
@@ -265,6 +288,10 @@ full-resolution mode.
 
 Only the elapsed stack region exists. Early frames therefore have a small active
 bounding box, and empty background voxels remain sparse.
+
+Display Density defaults to 1000 for a solid viewport preview and affects only
+visualization metadata. Jumping directly to a timeline frame cooks from the
+range start to that frame with native Houdini progress and Escape interruption.
 
 @outputs
 

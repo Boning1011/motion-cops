@@ -40,6 +40,7 @@ old_values = {
     "resolution": int(
         parm_value("resolution", parm_value("preview_resolution", 256))
     ),
+    "display_density": float(parm_value("display_density", 1000.0)),
 }
 display_flag = node.isDisplayFlagSet()
 
@@ -78,7 +79,19 @@ full_output = node.node("FULL_CPU_VOLUME")
 if full_output is None:
     full_output = node.createNode("output", "FULL_CPU_VOLUME")
 full_output.parm("outputidx").set(0)
-full_output.setInput(0, full_cache)
+visualize = node.node("viewport_density_visualization")
+if visualize is None:
+    visualize = node.createNode(
+        "volumevisualization", "viewport_density_visualization"
+    )
+visualize.setInput(0, full_cache)
+visualize.parm("densityfield").setExpression(
+    'chs("../volume_name")', hou.exprLanguage.Hscript
+)
+visualize.parm("densityscale").setExpression(
+    'ch("../display_density")', hou.exprLanguage.Hscript
+)
+full_output.setInput(0, visualize)
 
 old_preview_output = node.node("VIEWPORT_PREVIEW")
 if old_preview_output is not None:
@@ -92,7 +105,8 @@ full_cache.setPosition(hou.Vector2(-2.0, 1.5))
 slice_cache.setPosition(hou.Vector2(2.0, 1.5))
 convert.setPosition(hou.Vector2(2.0, 0.0))
 combine.setPosition(hou.Vector2(0.0, -1.5))
-full_output.setPosition(hou.Vector2(-2.0, -1.5))
+visualize.setPosition(hou.Vector2(-2.0, -0.25))
+full_output.setPosition(hou.Vector2(-2.0, -2.0))
 
 definition.updateFromNode(node)
 definition.setMinNumInputs(0)
@@ -125,6 +139,10 @@ full-resolution mode.
 Only the elapsed stack region exists. Early frames therefore have a small active
 bounding box, and empty background voxels remain sparse.
 
+Display Density defaults to 1000 for a solid viewport preview and affects only
+visualization metadata. Jumping directly to a timeline frame cooks from the
+range start to that frame with native Houdini progress and Escape interruption.
+
 @outputs
 
 output1:
@@ -146,6 +164,7 @@ node.setParms(
         "channel": old_values["channel"],
         "flip_y": old_values["flip_y"],
         "resolution": old_values["resolution"],
+        "display_density": old_values["display_density"],
     }
 )
 for parm_name, value in zip(("f1", "f2", "f3"), old_values["frame_range"]):
