@@ -12,21 +12,23 @@ MODULE_SOURCE = "C:/Users/boning/Documents/GitHub/motion-cops/scripts/mc_texture
 INSTANCE_PATH = "/obj/geo1/mc_texture_to_volume_cpu1"
 
 
+def module_callback_source(function_name):
+    return (
+        '_mc_module = {{}}; '
+        'exec(kwargs["node"].type().definition().sections()["PythonModule"].contents(), _mc_module); '
+        '_mc_module["{}"](kwargs)'.format(function_name)
+    )
+
+
 def callback_button(name, label, function_name):
     parm = hou.ButtonParmTemplate(name, label)
-    parm.setScriptCallback(
-        'exec(kwargs["node"].type().definition().sections()["PythonModule"].contents());{}(kwargs)'.format(
-            function_name
-        )
-    )
+    parm.setScriptCallback(module_callback_source(function_name))
     parm.setScriptCallbackLanguage(hou.scriptLanguage.Python)
     return parm
 
 
 def settings_callback(parm):
-    parm.setScriptCallback(
-        'exec(kwargs["node"].type().definition().sections()["PythonModule"].contents());settings_changed(kwargs)'
-    )
+    parm.setScriptCallback(module_callback_source("settings_changed"))
     parm.setScriptCallbackLanguage(hou.scriptLanguage.Python)
     return parm
 
@@ -267,11 +269,11 @@ definition.addSection("PythonModule", hou.readFile(MODULE_SOURCE))
 definition.addSection("EditableNodes", "cpu_volume_cache viewport_preview_cache")
 definition.addSection(
     "OnCreated",
-    'exec(kwargs["type"].definition().sections()["PythonModule"].contents());bootstrap_live(kwargs)',
+    module_callback_source("bootstrap_live"),
 )
 definition.addSection(
     "OnLoaded",
-    'exec(kwargs["type"].definition().sections()["PythonModule"].contents());bootstrap_live(kwargs)',
+    module_callback_source("bootstrap_live"),
 )
 definition.addSection(
     "Help",
