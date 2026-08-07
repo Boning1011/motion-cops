@@ -1,2 +1,4 @@
 otls/backup/
 backup/
+__pycache__/
+*.py[cod]
