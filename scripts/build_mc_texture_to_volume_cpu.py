@@ -267,11 +267,11 @@ definition.addSection("PythonModule", hou.readFile(MODULE_SOURCE))
 definition.addSection("EditableNodes", "cpu_volume_cache viewport_preview_cache")
 definition.addSection(
     "OnCreated",
-    'exec(kwargs["type"].definition().sections()["PythonModule"].contents());install_live(kwargs)',
+    'exec(kwargs["type"].definition().sections()["PythonModule"].contents());bootstrap_live(kwargs)',
 )
 definition.addSection(
     "OnLoaded",
-    'exec(kwargs["type"].definition().sections()["PythonModule"].contents());install_live(kwargs)',
+    'exec(kwargs["type"].definition().sections()["PythonModule"].contents());bootstrap_live(kwargs)',
 )
 definition.addSection(
     "Help",

@@ -7,6 +7,10 @@ import hou
 import numpy as np
 
 
+_LISTENER_VERSION = 2
+_DEFERRED_INSTALL_MAX_ATTEMPTS = 120
+
+
 def _set_status(node, message):
     parm = node.parm("status")
     if parm is not None:
@@ -29,6 +33,57 @@ def _listeners():
         value = {}
         setattr(hou.session, name, value)
     return value
+
+
+def _pending_installs():
+    name = "_mc_texture_to_volume_cpu_pending_installs"
+    value = getattr(hou.session, name, None)
+    if value is None:
+        value = {}
+        setattr(hou.session, name, value)
+    return value
+
+
+def _playbar_callback_is_registered(callback):
+    if callback is None:
+        return False
+    try:
+        return any(item is callback for item in hou.playbar.eventCallbacks())
+    except Exception:
+        return False
+
+
+def _node_callback_is_registered(node, callback):
+    if node is None or callback is None:
+        return False
+    try:
+        return any(item[1] is callback for item in node.eventCallbacks())
+    except Exception:
+        return False
+
+
+def _listener_is_healthy(node, entry):
+    if node is None or entry is None:
+        return False
+    if entry.get("version") != _LISTENER_VERSION:
+        return False
+    if entry.get("node_path") != node.path():
+        return False
+    if entry.get("node_session_id") != str(node.sessionId()):
+        return False
+    return _playbar_callback_is_registered(
+        entry.get("playbar_callback")
+    ) and _node_callback_is_registered(node, entry.get("node_callback"))
+
+
+def _cancel_pending_install(key):
+    pending = _pending_installs().pop(key, None)
+    callback = pending.get("callback") if pending else None
+    if callback is not None:
+        try:
+            hou.ui.removeEventLoopCallback(callback)
+        except Exception:
+            pass
 
 
 def _resolve_path(node, path):
@@ -371,6 +426,7 @@ def reset(kwargs):
     if hou.playbar.isPlaying():
         hou.playbar.stop()
     _restore_playback_settings(node)
+    ensure_live({"node": node})
     _recordings().pop(str(node.sessionId()), None)
     entry = _listeners().get(str(node.sessionId()))
     if entry is not None:
@@ -852,25 +908,37 @@ def _timeline_stopped(node, frame):
         )
 
 
+def _remove_listener_callbacks(entry):
+    if entry is None:
+        return
+    playbar_callback = entry.get("playbar_callback")
+    if _playbar_callback_is_registered(playbar_callback):
+        try:
+            hou.playbar.removeEventCallback(playbar_callback)
+        except Exception:
+            pass
+    old_node = hou.node(entry.get("node_path", ""))
+    node_callback = entry.get("node_callback")
+    node_events = entry.get("node_events")
+    if (
+        old_node is not None
+        and node_events is not None
+        and _node_callback_is_registered(old_node, node_callback)
+    ):
+        try:
+            old_node.removeEventCallback(node_events, node_callback)
+        except Exception:
+            pass
+
+
 def install_live(kwargs):
     node = kwargs.get("node")
     if node is None:
-        return
+        return None
     key = str(node.sessionId())
     listeners = _listeners()
     old = listeners.pop(key, None)
-    if old is not None:
-        try:
-            hou.playbar.removeEventCallback(old["playbar_callback"])
-        except hou.OperationFailed:
-            pass
-        old_node = hou.node(old["node_path"])
-        if old_node is not None:
-            try:
-                old_node.removeEventCallback(old["node_events"], old["node_callback"])
-            except hou.OperationFailed:
-                pass
-    _recordings().pop(key, None)
+    _remove_listener_callbacks(old)
     node_path = node.path()
     node_events = (hou.nodeEventType.InputRewired, hou.nodeEventType.BeingDeleted)
 
@@ -909,38 +977,122 @@ def install_live(kwargs):
     def node_callback(changed_node, event_type, **event_kwargs):
         if event_type == hou.nodeEventType.BeingDeleted:
             entry = _listeners().pop(key, None)
+            _cancel_pending_install(key)
             if entry is not None:
                 hou.playbar.setFrameIncrement(entry["original_frame_increment"])
                 hou.playbar.setUseIntegerFrames(entry["original_integer_frames"])
-                try:
-                    hou.playbar.removeEventCallback(entry["playbar_callback"])
-                except hou.OperationFailed:
-                    pass
+                _remove_listener_callbacks(entry)
             _recordings().pop(key, None)
         elif event_type == hou.nodeEventType.InputRewired:
             reset({"node": changed_node})
 
-    node.addEventCallback(node_events, node_callback)
-    hou.playbar.addEventCallback(playbar_callback)
-    listeners[key] = {
+    entry = {
+        "version": _LISTENER_VERSION,
         "node_path": node_path,
+        "node_session_id": key,
         "playbar_callback": playbar_callback,
         "node_callback": node_callback,
         "node_events": node_events,
-        "playback_settings": None,
-        "original_frame_increment": hou.playbar.frameIncrement(),
-        "original_integer_frames": hou.playbar.usesIntegerFrames(),
-        "completed_config_id": None,
-        "completed_frame": None,
-        "armed": None,
+        "playback_settings": old.get("playback_settings") if old else None,
+        "original_frame_increment": old.get(
+            "original_frame_increment", hou.playbar.frameIncrement()
+        ) if old else hou.playbar.frameIncrement(),
+        "original_integer_frames": old.get(
+            "original_integer_frames", hou.playbar.usesIntegerFrames()
+        ) if old else hou.playbar.usesIntegerFrames(),
+        "completed_config_id": old.get("completed_config_id") if old else None,
+        "completed_frame": old.get("completed_frame") if old else None,
+        "armed": old.get("armed") if old else None,
         "recording_active": False,
         "seek_cooking": False,
         "suppress_frame_trigger": False,
     }
+    try:
+        node.addEventCallback(node_events, node_callback)
+        hou.playbar.addEventCallback(playbar_callback)
+        listeners[key] = entry
+        if not _listener_is_healthy(node, entry):
+            raise hou.OperationFailed("Live callbacks did not remain registered")
+    except Exception:
+        listeners.pop(key, None)
+        _remove_listener_callbacks(entry)
+        raise
     node.setOutputForViewFlag(0)
     refresh_info({"node": node})
     _set_idle_frame_increment(node)
     _arm_current_frame(node)
+    return entry
+
+
+def ensure_live(kwargs):
+    node = kwargs.get("node")
+    if node is None:
+        return None
+    entry = _listeners().get(str(node.sessionId()))
+    if _listener_is_healthy(node, entry):
+        return entry
+    return install_live({"node": node})
+
+
+def schedule_install_live(kwargs):
+    node = kwargs.get("node")
+    if node is None:
+        return
+    key = str(node.sessionId())
+    node_path = node.path()
+    _cancel_pending_install(key)
+    state = {
+        "callback": None,
+        "attempts": 0,
+        "healthy_ticks": 0,
+        "last_error": None,
+    }
+
+    def deferred_install():
+        active_node = hou.node(node_path)
+        if active_node is None or str(active_node.sessionId()) != key:
+            _cancel_pending_install(key)
+            return
+        state["attempts"] += 1
+        try:
+            entry = ensure_live({"node": active_node})
+            if _listener_is_healthy(active_node, entry):
+                state["healthy_ticks"] += 1
+                if state["healthy_ticks"] >= 2:
+                    _cancel_pending_install(key)
+                    return
+            else:
+                state["healthy_ticks"] = 0
+        except Exception as exc:
+            state["healthy_ticks"] = 0
+            state["last_error"] = str(exc)
+        if state["attempts"] >= _DEFERRED_INSTALL_MAX_ATTEMPTS:
+            _cancel_pending_install(key)
+            _set_status(
+                active_node,
+                "Timeline trigger unavailable: {}".format(
+                    state["last_error"] or "callback registration failed"
+                ),
+            )
+
+    state["callback"] = deferred_install
+    _pending_installs()[key] = state
+    try:
+        hou.ui.addEventLoopCallback(deferred_install)
+    except Exception:
+        _pending_installs().pop(key, None)
+        ensure_live({"node": node})
+
+
+def bootstrap_live(kwargs):
+    node = kwargs.get("node")
+    if node is None:
+        return
+    try:
+        ensure_live({"node": node})
+    except Exception:
+        pass
+    schedule_install_live({"node": node})
 
 
 def clear(kwargs):
