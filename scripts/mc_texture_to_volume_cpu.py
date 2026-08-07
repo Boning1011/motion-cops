@@ -7,7 +7,7 @@ import hou
 import numpy as np
 
 
-_LISTENER_VERSION = 2
+_LISTENER_VERSION = 3
 _DEFERRED_INSTALL_MAX_ATTEMPTS = 120
 
 
@@ -974,7 +974,7 @@ def install_live(kwargs):
             if hou.playbar.isPlaying():
                 hou.playbar.stop()
 
-    def node_callback(changed_node, event_type, **event_kwargs):
+    def node_callback(event_type, **event_kwargs):
         if event_type == hou.nodeEventType.BeingDeleted:
             entry = _listeners().pop(key, None)
             _cancel_pending_install(key)
@@ -984,7 +984,9 @@ def install_live(kwargs):
                 _remove_listener_callbacks(entry)
             _recordings().pop(key, None)
         elif event_type == hou.nodeEventType.InputRewired:
-            reset({"node": changed_node})
+            active_node = hou.node(node_path)
+            if active_node is not None:
+                reset({"node": active_node})
 
     entry = {
         "version": _LISTENER_VERSION,
