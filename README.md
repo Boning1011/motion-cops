@@ -1,16 +1,18 @@
-![MotionCOPs](demo/banner.png)
-
 # MotionCOPs
 
-> **Now compatible with Houdini 22** (Python 3.13) — Houdini 21 remains fully supported.
+Ready-to-use tools for Houdini Copernicus, built in daily production by [Bo-Ning Li](https://boningli.com).
 
-MotionCOPs is an open-source Houdini Copernicus toolkit created and maintained by [Bo-Ning Li](https://boningli.com). It grows directly from my daily production work in Houdini 21 & 22.
+## Recent practical features
 
-**Project page:** [boningli.com/rnd/motion-cops](https://boningli.com/rnd/motion-cops)
+- **Batch media paste** — **Ctrl+V** images and videos straight into COPs. [Details](docs/media-paste.md)
+- **LUT grading** — apply `.cube` LUTs and adjust their intensity. [Example](Example_LUTs.hiplc)
+- **2D → 3D volumes** — stack animated images into volumes, with a CPU sparse VDB option.
 
-Every tool here is one I actually use — tested on real projects at 10K+ resolution and refined through day-to-day use. Not a tech demo: it's the kit I reach for every day.
+**Houdini 21 & 22** · [Install MotionCOPs](#installation) · [Project page](https://boningli.com/rnd/motion-cops)
 
 **Inside:** organic growth · stylization · dithering & risograph · glitch · Kubelka-Munk color · SOP ↔ image bridges · time & caching utilities
+
+![MotionCOPs](demo/banner.png)
 
 ## Work made with MotionCOPs
 
@@ -149,39 +151,5 @@ See the [Houdini docs](https://www.sidefx.com/docs/houdini/ref/plugins.html) for
 
 ### Paste images and videos into COPs
 
-Copy one or more image/video files in Explorer or Finder, move the mouse over a
-Copernicus network editor, and press **Ctrl+V** (Cmd+V on macOS). MotionCOPs creates
-one native **File COP per file**, reads its AOVs, and places the selected nodes in
-a grid at the cursor. **Ctrl+Z** undoes the entire paste. Numbered images remain
-separate stills; they are not silently combined into a sequence.
-
-- Supports native file selections and quoted absolute paths (Windows **Copy as
-  path**), including spaces, Unicode and file URLs.
-- Skips duplicate paths within a paste, missing files, directories and unsupported
-  extensions. Reports skipped/failed files in the status bar and Python Shell.
-- Preserves native node Copy/Cut/Paste. After copying nodes, the native node
-  clipboard takes priority until you copy something new to the system clipboard.
-- Works in Copernicus networks, including COP Network SOPs and subnets. Other
-  network types and text fields keep their normal paste behavior.
-- Uses Houdini's own image/video reader; available formats/codecs depend on your
-  Houdini installation. No extra runtime dependency or background conversion.
-
-The feature starts automatically after installing the package and restarting
-Houdini (21 / 22). To disable it, set `MOTIONCOPS_CLIPBOARD=0` before launch.
-It uses the [network editor hook](https://www.sidefx.com/docs/houdini/hom/network.html)
-and chains any existing `nodegraphhooks` implementation instead of replacing its
-file. To run checks:
-
-```sh
-python -m unittest discover -s tests -v
-```
-
-For the GUI integration check, run the following in Houdini's Python Shell. It
-creates tiny test images, a short MP4 (requires FFmpeg with lavfi/libx264), and a
-test COP network under the current `$HIP` project; it restores the system
-clipboard afterward. Test media stay in `$HIP/motioncops_clipboard_validation/`.
-
-```python
-import runpy, hou
-runpy.run_path(hou.getenv("MotionCOPs") + "/tests/validate_clipboard_houdini.py")["main"]()
-```
+Copy files, then **Ctrl+V** in a COPs network; **Ctrl+Z** undoes the batch.
+See the [media paste guide](docs/media-paste.md) for details and checks.
